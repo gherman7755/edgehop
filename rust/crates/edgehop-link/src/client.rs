@@ -2,6 +2,7 @@
 
 use std::io;
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -46,6 +47,7 @@ impl ClientConfig {
 }
 
 pub struct LinkClient {
+    closing: Arc<AtomicBool>,
     writer: Arc<FrameWriter>,
     reader: Mutex<Option<JoinHandle<()>>>,
 }
@@ -93,13 +95,16 @@ impl LinkClient {
             return Err(LinkError::Rejected);
         }
 
+        let closing = Arc::new(AtomicBool::new(false));
+        let thread_closing = Arc::clone(&closing);
         let thread_writer = Arc::clone(&writer);
         let handle = thread::Builder::new()
             .name("edgehop-link-client".into())
-            .spawn(move || read_loop(reader, &thread_writer, handler.as_ref()))
+            .spawn(move || read_loop(reader, &thread_writer, handler.as_ref(), &thread_closing))
             .map_err(|e| LinkError::Connection(e.to_string()))?;
         Ok((
             Self {
+                closing,
                 writer,
                 reader: Mutex::new(Some(handle)),
             },
@@ -126,6 +131,7 @@ impl LinkClient {
 
     /// Closes the connection. Idempotent.
     pub fn close(&self) {
+        self.closing.store(true, Ordering::SeqCst);
         self.writer.shutdown();
         if let Some(handle) = lock(&self.reader).take() {
             // `on_closed` runs on the reader thread and may drop the client: never join ourselves.
@@ -188,8 +194,13 @@ fn next(
     })
 }
 
-fn read_loop(mut reader: FrameReader, writer: &FrameWriter, handler: &dyn ClientHandler) {
-    while let Ok(frame) = reader.next_frame(None) {
+fn read_loop(
+    mut reader: FrameReader,
+    writer: &FrameWriter,
+    handler: &dyn ClientHandler,
+    closing: &AtomicBool,
+) {
+    while let Ok(frame) = reader.next_frame_until_closed(closing) {
         if frame.frame_type == FrameType::Pong {
             if let Some(rtt) = rtt_millis(&frame.payload, now_millis()) {
                 handler.on_pong(rtt);

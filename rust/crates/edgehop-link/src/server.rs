@@ -198,7 +198,7 @@ fn serve_peer(shared: &Shared, stream: TcpStream) {
     }
 
     shared.handler.on_peer_connected(&hello);
-    while let Ok(frame) = reader.next_frame(None) {
+    while let Ok(frame) = reader.next_frame_until_closed(&shared.stop) {
         match frame.frame_type {
             FrameType::Input => {
                 // A malformed record is ignored, like in the Swift core.

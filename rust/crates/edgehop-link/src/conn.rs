@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -42,6 +43,9 @@ impl FrameWriter {
     }
 }
 
+/// How often a blocked read wakes up to check whether it should give up.
+const WAKE_INTERVAL: Duration = Duration::from_millis(200);
+
 #[derive(Debug)]
 pub(crate) enum ReadError {
     /// The peer closed the connection.
@@ -65,6 +69,25 @@ impl FrameReader {
             stream,
             decoder: FrameDecoder::new(),
             queue: VecDeque::new(),
+        }
+    }
+
+    /// The next frame, waiting for as long as the connection lives, but returning `Closed` soon after `closing`
+    /// is set.
+    ///
+    /// A plain blocking read cannot be relied on to end when another thread calls `shutdown` on the socket:
+    /// on Windows the read can stay blocked forever, which made `close()` hang (found with a stress test on a
+    /// Windows runner). So the read wakes every `WAKE_INTERVAL` and looks at the flag itself.
+    pub(crate) fn next_frame_until_closed(
+        &mut self,
+        closing: &AtomicBool,
+    ) -> Result<Frame, ReadError> {
+        loop {
+            match self.next_frame(Some(Instant::now() + WAKE_INTERVAL)) {
+                Err(ReadError::TimedOut) if !closing.load(Ordering::SeqCst) => {}
+                Err(ReadError::TimedOut) => return Err(ReadError::Closed),
+                other => return other,
+            }
         }
     }
 
