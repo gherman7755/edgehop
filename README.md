@@ -25,6 +25,9 @@ network you trust. No license has been chosen yet (all rights reserved by defaul
 | `Sources/EdgeHopApp/` | The macOS desktop app (SwiftUI window + menu bar item) |
 | `scripts/package-app.sh` | Builds `dist/EdgeHop.app` (ad-hoc signed) |
 | `docs/PROTOCOL.md` | Wire protocol, for other implementations (e.g. Windows) |
+| `docs/IPC.md` | The local UI-to-core API (newline-delimited JSON over stdin/stdout) |
+| `Sources/EdgeHopIPC/`, `Sources/edgehop-core/` | The core as a headless helper process implementing that API |
+| `scripts/ipc-smoke.mjs` | End-to-end check of the helper from a real (Node) client |
 | `Sources/EdgeHopCore/Link.swift` | M4 plaintext TCP link: `LinkServer`/`LinkClient`, token challenge-response, hello/ping/input frames, `PanicChord` |
 | `Sources/edgehop-link/` | `token`, `serve`, `connect HOST`: mirror mouse input to another Mac |
 | `scripts/deploy.sh` | Build release `edgehop-link` and `scp` it to the other Mac |
@@ -62,6 +65,18 @@ token, set which side the other Mac is on, Connect. Close the window and it keep
 The Log section has a "Verbose diagnostics" switch and a Copy button: paste it when something misbehaves.
 Because the app is ad-hoc signed, re-grant Accessibility / Input Monitoring after each rebuild.
 The Command Line Tools have no SwiftUI macro plugin: do not use `@State` (keep view state in `AppModel`).
+
+## Core helper (IPC)
+
+The core can run as a headless helper that any UI drives (planned: an Electron UI on macOS and Windows, with a
+Rust core on Windows speaking the same API). See `docs/IPC.md`.
+
+```bash
+swift build --product edgehop-core
+node scripts/ipc-smoke.mjs                       # spawns the helper and exercises the protocol (~10 s)
+printf '{"id":1,"method":"core.hello"}\n' | .build/debug/edgehop-core
+```
+If the UI dies, the helper's stdin closes and it stops every session and gives the cursor back.
 
 ## Two-Mac test (M4)
 
@@ -103,10 +118,12 @@ Everything is unencrypted: do it on a trusted network, with keys off.
    `release_all` control frame. Panic chord, link loss, Ctrl+C/SIGTERM and `--seconds` always hand control
    back (and re-couple the cursor). Needs one two-Mac run to mark done. Not done yet: hiding the local cursor
    (the original uses a private CGS call), drags across the edge, multi-display edges, dead corners in the CLI.
-6. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
+6. 🟨 **Core IPC (UI to core):** implemented for macOS (`edgehop-core`, `docs/IPC.md`, 14 unit tests and the
+   Node smoke test). Next: Rust core for Windows against the same API, then the Electron UI.
+7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
    Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
-7. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.
-8. ⬜ **M8 polish:** `PeerHello` with monitor geometry, layout sync with a revision, sleep-gap detection,
+8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.
+9. ⬜ **M8 polish:** `PeerHello` with monitor geometry, layout sync with a revision, sleep-gap detection,
    reconnect, ping/pong latency, tap re-enable stress test.
 
 ## Safety notes
