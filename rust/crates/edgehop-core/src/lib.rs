@@ -12,6 +12,7 @@ pub mod backend;
 pub mod ipc;
 pub mod params;
 pub mod service;
+pub mod stub;
 
 /// Version reported by `core.hello`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
