@@ -1,0 +1,18 @@
+[package]
+name = "edgehop-win"
+description = "EdgeHop Windows platform layer: displays, input injection (SendInput) and mouse capture (low-level hook). Empty on other platforms."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+edgehop-proto = { path = "../edgehop-proto" }
+edgehop-input = { path = "../edgehop-input" }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_HiDpi"] }
