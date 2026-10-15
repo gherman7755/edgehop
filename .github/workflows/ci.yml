@@ -25,16 +25,14 @@ jobs:
         run: swift test
       - name: IPC smoke test against the Swift core
         run: node scripts/ipc-smoke.mjs .build/debug/edgehop-core
-      # The next three steps need the Rust core crate (PR #8). Drop the condition once it is on main.
       - name: Build the Rust core
-        if: hashFiles('rust/crates/edgehop-core/Cargo.toml') != ''
         run: cargo build --manifest-path rust/Cargo.toml -p edgehop-core
       - name: Swift accepts what Rust writes
-        if: hashFiles('rust/crates/edgehop-core/Cargo.toml') != ''
         run: scripts/check-rust-compat.sh
       - name: Swift and Rust cores answer identically
-        if: hashFiles('rust/crates/edgehop-core/Cargo.toml') != ''
         run: node scripts/ipc-conformance.mjs .build/debug/edgehop-core rust/target/debug/edgehop-core
+      - name: Swift and Rust links interoperate over TCP
+        run: scripts/check-link-interop.sh
 
   rust:
     name: Rust (${{ matrix.os }})
@@ -59,6 +57,7 @@ jobs:
       - name: Clippy (warnings are errors)
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
+        timeout-minutes: 10
         run: cargo test
       - name: Type-check for Windows from Linux
         if: runner.os == 'Linux'
@@ -66,9 +65,9 @@ jobs:
           rustup target add x86_64-pc-windows-msvc
           cargo check --target x86_64-pc-windows-msvc
       - name: Build the core
-        if: runner.os == 'Windows' && hashFiles('rust/crates/edgehop-core/Cargo.toml') != ''
+        if: runner.os == 'Windows'
         run: cargo build -p edgehop-core
       - name: IPC smoke test of the Rust core on Windows
-        if: runner.os == 'Windows' && hashFiles('rust/crates/edgehop-core/Cargo.toml') != ''
+        if: runner.os == 'Windows'
         working-directory: .
         run: node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core.exe --platform windows --stub
