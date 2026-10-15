@@ -33,6 +33,10 @@ jobs:
         run: node scripts/ipc-conformance.mjs .build/debug/edgehop-core rust/target/debug/edgehop-core
       - name: Swift and Rust links interoperate over TCP
         run: scripts/check-link-interop.sh
+      - name: Recorded switching scenarios are up to date
+        run: |
+          scripts/golden-vectors.sh scenarios > "$RUNNER_TEMP/scenarios.json"
+          cmp "$RUNNER_TEMP/scenarios.json" rust/crates/edgehop-switch/tests/scenarios.json
 
   rust:
     name: Rust (${{ matrix.os }})
