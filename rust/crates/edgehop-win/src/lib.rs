@@ -11,10 +11,12 @@
 
 #![cfg(windows)]
 
+mod capture;
 mod displays;
 mod dpi;
 mod output;
 
+pub use capture::{Capture, CaptureCallbacks, CaptureError, Motion};
 pub use displays::list_monitors;
 pub use dpi::ensure_dpi_aware;
 pub use output::WinOutput;
