@@ -63,6 +63,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "edgehop-link"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "edgehop-proto",
+ "thiserror",
+]
+
+[[package]]
 name = "edgehop-proto"
 version = "0.1.0"
 dependencies = [
