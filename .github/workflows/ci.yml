@@ -57,6 +57,7 @@ jobs:
       - name: Clippy (warnings are errors)
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
+        timeout-minutes: 10
         run: cargo test
       - name: Type-check for Windows from Linux
         if: runner.os == 'Linux'
