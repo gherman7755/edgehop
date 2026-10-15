@@ -158,11 +158,137 @@ func verify(path: String) {
     print("Swift accepted \(checked) Rust vectors")
 }
 
+// MARK: scenarios (differential test of the edge-switching controller)
+
+/// Deterministic pseudo-random numbers so the scenarios are reproducible.
+struct Lcg {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        return state >> 11
+    }
+    mutating func int(_ range: ClosedRange<Int>) -> Int { range.lowerBound + Int(next() % UInt64(range.count)) }
+    mutating func pick<T>(_ items: [T]) -> T { items[int(0...(items.count - 1))] }
+}
+
+final class Trace {
+    var entries: [[String: Any]] = []
+}
+
+func sideName(_ side: Side) -> String { side.rawValue }
+
+func rectJSON(_ r: Rect) -> [String: Any] { ["x": r.x, "y": r.y, "width": r.width, "height": r.height] }
+
+/// Runs `steps` through the real Swift controller and records everything it does.
+func runScenario(name: String, displays: [Rect], side: Side, remote: (Double, Double), forwardKeys: Bool, steps: [[String: Any]]) -> [String: Any] {
+    let trace = Trace()
+    let actions = SwitchController.Actions(
+        send: { trace.entries.append(["action": "send", "event": describe($0)]) },
+        enterRemote: { trace.entries.append(["action": "enter"]) },
+        leaveRemote: { trace.entries.append(["action": "leave", "x": $0.x, "y": $0.y]) },
+        releaseRemote: { trace.entries.append(["action": "release"]) }
+    )
+    let controller = SwitchController(displays: displays, side: side, remoteWidth: remote.0, remoteHeight: remote.1, forwardKeys: forwardKeys, actions: actions)
+    for (index, step) in steps.enumerated() {
+        trace.entries.append(["step": index])
+        switch step["op"] as? String {
+        case "motion":
+            controller.handleMotion(position: Point(x: (step["x"] as! NSNumber).doubleValue, y: (step["y"] as! NSNumber).doubleValue),
+                                    delta: Point(x: (step["dx"] as! NSNumber).doubleValue, y: (step["dy"] as! NSNumber).doubleValue))
+        case "handle":
+            controller.handle(parseEvent(step["event"] as! [String: Any])!)
+        case "swallow":
+            trace.entries.append(["swallow": controller.shouldSwallow(parseEvent(step["event"] as! [String: Any])!)])
+        case "return":
+            controller.returnToLocal()
+        default: fatalError("unknown step")
+        }
+        trace.entries.append(["mode": controller.mode == .remote ? "remote" : "local"])
+    }
+    return [
+        "name": name, "displays": displays.map(rectJSON), "side": sideName(side), "remoteWidth": remote.0, "remoteHeight": remote.1,
+        "forwardKeys": forwardKeys, "steps": steps, "trace": trace.entries,
+    ]
+}
+
+func motion(_ x: Double, _ y: Double, _ dx: Double, _ dy: Double) -> [String: Any] { ["op": "motion", "x": x, "y": y, "dx": dx, "dy": dy] }
+func handleStep(_ e: InputEvent) -> [String: Any] { ["op": "handle", "event": describe(e)] }
+func swallowStep(_ e: InputEvent) -> [String: Any] { ["op": "swallow", "event": describe(e)] }
+
+/// Random but edge-biased steps: positions near the borders of the given displays are where the logic lives.
+func randomSteps(count: Int, displays: [Rect], seed: UInt64) -> [[String: Any]] {
+    var rng = Lcg(state: seed)
+    let minX = displays.map { $0.minX }.min()!, maxX = displays.map { $0.maxX }.max()!
+    let minY = displays.map { $0.minY }.min()!, maxY = displays.map { $0.maxY }.max()!
+    func position() -> (Double, Double) {
+        let d = rng.pick(displays)
+        let xs = [d.minX, d.minX + 1, d.minX + 2, d.maxX - 3, d.maxX - 2, d.maxX - 1, d.maxX - 0.5, Double(rng.int(Int(minX)...Int(maxX - 1)))]
+        let ys = [d.minY, d.minY + 1, d.maxY - 2, d.maxY - 1, Double(rng.int(Int(minY)...Int(maxY - 1)))]
+        return (rng.pick(xs), rng.pick(ys))
+    }
+    let buttons: [MouseButton] = [.left, .right, .middle, .back, .forward]
+    var steps: [[String: Any]] = []
+    for _ in 0..<count {
+        switch rng.int(0...99) {
+        case 0..<55:
+            let (x, y) = position()
+            let big = [-1500, -300, -40, -12, -5, -2, -1, 0, 1, 2, 5, 12, 40, 300, 1500]
+            steps.append(motion(x, y, Double(rng.pick(big)), Double(rng.pick(big))))
+        case 55..<68: steps.append(handleStep(.mouseButton(rng.pick(buttons), isDown: rng.int(0...1) == 1)))
+        case 68..<74: steps.append(handleStep(.scroll(horizontal: Int32(rng.int(-240...240)), vertical: Int32(rng.int(-240...240)))))
+        case 74..<80: steps.append(handleStep(.key(code: UInt16(rng.int(0...60)), isDown: rng.int(0...1) == 1, modifiers: Modifiers(rawValue: UInt8(rng.int(0...15))))))
+        case 80..<92:
+            let events: [InputEvent] = [.mouseMoveAbsolute(x: 3, y: 4), .mouseMoveDelta(dx: 1, dy: 1), .mouseButton(.left, isDown: true), .scroll(horizontal: 0, vertical: 120), .key(code: 5, isDown: true, modifiers: [])]
+            steps.append(swallowStep(rng.pick(events)))
+        default: steps.append(["op": "return"])
+        }
+    }
+    return steps
+}
+
+func generateScenarios() {
+    let laptop = Rect(x: 0, y: 0, width: 1512, height: 982)
+    let above = Rect(x: -223, y: -1080, width: 1920, height: 1080)
+    let left = Rect(x: 0, y: 0, width: 1000, height: 800)
+    let right = Rect(x: 1000, y: 0, width: 1000, height: 800)
+    var out: [[String: Any]] = []
+
+    // Hand-written walk through the whole life cycle (the laptop + monitor-above setup).
+    out.append(runScenario(name: "lifecycle laptop+monitor right", displays: [laptop, above], side: .right, remote: (1440, 900), forwardKeys: false, steps: [
+        motion(800, 500, 6, 0), motion(1511, 500, 6, 0), swallowStep(.mouseMoveDelta(dx: 1, dy: 1)), motion(1511, 500, 10, 5),
+        handleStep(.mouseButton(.right, isDown: true)), handleStep(.scroll(horizontal: 0, vertical: -120)), motion(1511, 500, 0, -1000),
+        motion(0, 0, -5, 0), motion(0, 0, -5, 0), swallowStep(.mouseMoveAbsolute(x: 1, y: 1)), swallowStep(.mouseMoveAbsolute(x: 1, y: 1)),
+        motion(1696, -500, 6, 0), motion(0, 0, 40, 0), ["op": "return"], ["op": "return"],
+    ]))
+    out.append(runScenario(name: "keys forwarded", displays: [laptop], side: .left, remote: (1440, 900), forwardKeys: true, steps: [
+        swallowStep(.key(code: 0, isDown: true, modifiers: [])), motion(0, 300, -6, 0), handleStep(.key(code: 0, isDown: true, modifiers: [.shift])),
+        swallowStep(.key(code: 0, isDown: true, modifiers: [])), motion(1439, 300, 3, 0),
+    ]))
+
+    // Randomised, replayed identically by the Rust tests.
+    let layouts: [(String, [Rect], Side, (Double, Double), Bool)] = [
+        ("random laptop+monitor right", [laptop, above], .right, (1440, 900), false),
+        ("random laptop+monitor left keys", [laptop, above], .left, (1728, 1117), true),
+        ("random side by side top", [left, right], .top, (1280, 800), false),
+        ("random single bottom keys", [laptop], .bottom, (1920, 1080), true),
+        ("random tiny remote right", [laptop, above], .right, (30, 20), false),
+    ]
+    for (index, layout) in layouts.enumerated() {
+        for round in 0..<4 {
+            let steps = randomSteps(count: 120, displays: layout.1, seed: UInt64(1000 * (index + 1) + round))
+            out.append(runScenario(name: "\(layout.0) #\(round)", displays: layout.1, side: layout.2, remote: layout.3, forwardKeys: layout.4, steps: steps))
+        }
+    }
+    let data = try! JSONSerialization.data(withJSONObject: ["scenarios": out], options: [.sortedKeys, .withoutEscapingSlashes])
+    print(String(data: data, encoding: .utf8)!)
+}
+
 let arguments = CommandLine.arguments
 switch arguments.dropFirst().first {
 case "gen": generate()
+case "scenarios": generateScenarios()
 case "verify":
     guard arguments.count >= 3 else { fail("usage: golden verify FILE") }
     verify(path: arguments[2])
-default: fail("usage: golden gen | golden verify FILE")
+default: fail("usage: golden gen | golden scenarios | golden verify FILE")
 }
