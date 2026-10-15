@@ -92,6 +92,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "edgehop-switch"
+version = "0.1.0"
+dependencies = [
+ "edgehop-proto",
+ "serde_json",
+]
+
+[[package]]
 name = "edgehop-win"
 version = "0.1.0"
 dependencies = [

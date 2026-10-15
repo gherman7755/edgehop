@@ -31,6 +31,8 @@ network you trust. No license has been chosen yet (all rights reserved by defaul
 | `scripts/ipc-conformance.mjs` | Sends the same requests to two cores (Swift, Rust) and requires identical responses |
 | `rust/` | Rust workspace for the Windows core. `crates/edgehop-proto`: wire protocol (frames, records, handshake). `crates/edgehop-core`: the core process (IPC server, service, backend trait, stub backend) |
 | `rust/crates/edgehop-link` | The Rust TCP link: token-authenticated server and client on `edgehop-proto` (std threads, no async runtime) |
+| `rust/crates/edgehop-input`, `rust/crates/edgehop-win` | Input injection logic shared by every platform (`OsInput` trait, tested with a fake) and the Windows layer (displays, `SendInput`, mouse hook and raw input); see `docs/WINDOWS.md` |
+| `rust/crates/edgehop-switch` | Edge switching in Rust: a port of the Swift `SwitchController`, replayed against scenarios recorded from the Swift one |
 | `scripts/check-link-interop.sh` | Swift and Rust links must interoperate over real TCP, both directions |
 | `scripts/golden-vectors.sh`, `scripts/check-rust-compat.sh` | Cross-language wire checks between the Swift core and the Rust crate |
 | `Sources/EdgeHopCore/Link.swift` | M4 plaintext TCP link: `LinkServer`/`LinkClient`, token challenge-response, hello/ping/input frames, `PanicChord` |
@@ -96,6 +98,7 @@ cargo clippy --all-targets -- -D warnings
 cargo check --target x86_64-pc-windows-msvc         # type-checks for Windows from any machine
 cd .. && scripts/check-rust-compat.sh               # Swift must accept everything Rust writes
 scripts/golden-vectors.sh gen > rust/crates/edgehop-proto/tests/golden.json   # regenerate if the protocol changes
+scripts/golden-vectors.sh scenarios > rust/crates/edgehop-switch/tests/scenarios.json   # regenerate if the Swift switching logic changes
 
 (cd rust && cargo build -p edgehop-core)
 node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core --stub              # "--platform windows" on Windows
@@ -103,12 +106,14 @@ node scripts/ipc-conformance.mjs .build/debug/edgehop-core rust/target/debug/edg
 scripts/check-link-interop.sh                       # Rust controller <-> Swift receiver and Swift controller <-> Rust receiver
 ```
 The golden vectors in `edgehop-proto` are produced by the Swift implementation, and the conformance script
-requires the two cores to answer 43 requests (errors included) identically.
+requires the two cores to answer 43 requests (errors included) identically. The edge-switching port is checked the
+same way: Swift runs 22 scripted and pseudo-random scenarios (2,420 steps) through its real `SwitchController` and
+records every action, and the Rust controller must produce the identical trace.
 
 The Rust core's session backend is a stub for now: every IPC method works, but starting a controller or receiver
-returns an `internal` error. The pieces to replace it exist or are next: the TCP link (`edgehop-link`, done: server and
-client with the token handshake, 13 loopback tests, interoperating with the Swift link in both directions) and the
-Windows input layer (hooks, `SendInput`, displays), which is what the backend will be wired to.
+returns an `internal` error. The pieces to replace it exist: the TCP link (`edgehop-link`), the input layer
+(`edgehop-input` and `edgehop-win`) and the edge-switching controller (`edgehop-switch`). Joining them into receiver
+and controller sessions behind the IPC is what is left.
 
 ## Two-Mac test (M4)
 
@@ -154,7 +159,9 @@ Everything is unencrypted: do it on a trusted network, with keys off.
    Node smoke test). Rust core for Windows: wire protocol crate (27 tests, byte-compatible with Swift in both
    directions) and the core process speaking the IPC (28 tests, stub session backend, identical to the Swift core
    on 43 conformance requests); TCP link crate (13 loopback tests, interoperates with the Swift link both ways).
-   Next: the Windows input layer and the session backend that joins link and input, then the Electron UI.
+   Windows input layer (injection verified on a real Windows runner); edge-switching controller ported to Rust and
+   proven identical to the Swift one on recorded scenarios. Next: the session backend that joins link, input and
+   switching, then the Electron UI.
 7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
    Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
 8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.

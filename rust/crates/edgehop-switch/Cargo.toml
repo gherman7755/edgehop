@@ -1,0 +1,17 @@
+[package]
+name = "edgehop-switch"
+description = "EdgeHop edge switching: when the cursor leaves this computer for the other one and back (port of the Swift SwitchController)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+edgehop-proto = { path = "../edgehop-proto" }
+
+[dev-dependencies]
+serde_json = "1"
