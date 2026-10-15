@@ -94,6 +94,9 @@ dependencies = [
 [[package]]
 name = "edgehop-switch"
 version = "0.1.0"
+dependencies = [
+ "edgehop-proto",
+]
 
 [[package]]
 name = "edgehop-win"
