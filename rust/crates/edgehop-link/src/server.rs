@@ -64,6 +64,7 @@ struct Shared {
 
 impl Shared {
     fn release(&self, id: u64) {
+        eprintln!("[DEBUG-7c1e] server.release {id}");
         let mut active = lock(&self.active);
         if active.as_ref().is_some_and(|(current, _)| *current == id) {
             *active = None;
@@ -114,6 +115,7 @@ impl LinkServer {
 
     /// Stops accepting and drops the current peer. Idempotent.
     pub fn stop(&self) {
+        eprintln!("[DEBUG-7c1e] server.stop: begin");
         self.shared.stop.store(true, Ordering::SeqCst);
         // `accept` blocks: a throw-away connection to ourselves wakes it so it can see the stop flag.
         let _ = TcpStream::connect_timeout(&self.wake, Duration::from_secs(1));
@@ -123,6 +125,7 @@ impl LinkServer {
         if let Some((_, stream)) = lock(&self.shared.active).as_ref() {
             let _ = stream.shutdown(Shutdown::Both);
         }
+        eprintln!("[DEBUG-7c1e] server.stop: end");
     }
 }
 
@@ -142,8 +145,10 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
         {
             let mut active = lock(&shared.active);
             if active.is_some() {
+                eprintln!("[DEBUG-7c1e] server.accept: slot busy, dropping new connection");
                 continue; // one peer at a time: the new connection is dropped
             }
+            eprintln!("[DEBUG-7c1e] server.accept: serving connection {id}");
             let Ok(handle) = stream.try_clone() else {
                 continue;
             };
@@ -198,7 +203,14 @@ fn serve_peer(shared: &Shared, stream: TcpStream) {
     }
 
     shared.handler.on_peer_connected(&hello);
-    while let Ok(frame) = reader.next_frame(None) {
+    loop {
+        let frame = match reader.next_frame(None) {
+            Ok(frame) => frame,
+            Err(error) => {
+                eprintln!("[DEBUG-7c1e] server.peer loop ends: {error:?}");
+                break;
+            }
+        };
         match frame.frame_type {
             FrameType::Input => {
                 // A malformed record is ignored, like in the Swift core.
@@ -222,8 +234,11 @@ fn serve_peer(shared: &Shared, stream: TcpStream) {
             FrameType::Hello | FrameType::Layout | FrameType::Pong => {}
         }
     }
+    eprintln!("[DEBUG-7c1e] server.peer: calling on_peer_disconnected");
     shared.handler.on_peer_disconnected();
+    eprintln!("[DEBUG-7c1e] server.peer: shutting down write side");
     writer.shutdown();
+    eprintln!("[DEBUG-7c1e] server.peer: done");
 }
 
 /// The controller's hello if it carries a valid proof for `nonce`.

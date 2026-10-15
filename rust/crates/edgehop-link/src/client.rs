@@ -126,11 +126,14 @@ impl LinkClient {
 
     /// Closes the connection. Idempotent.
     pub fn close(&self) {
+        eprintln!("[DEBUG-7c1e] client.close: shutting down");
         self.writer.shutdown();
+        eprintln!("[DEBUG-7c1e] client.close: shut down, joining reader");
         if let Some(handle) = lock(&self.reader).take() {
             // `on_closed` runs on the reader thread and may drop the client: never join ourselves.
             if handle.thread().id() != thread::current().id() {
                 let _ = handle.join();
+                eprintln!("[DEBUG-7c1e] client.close: reader joined");
             }
         }
     }
@@ -189,7 +192,14 @@ fn next(
 }
 
 fn read_loop(mut reader: FrameReader, writer: &FrameWriter, handler: &dyn ClientHandler) {
-    while let Ok(frame) = reader.next_frame(None) {
+    loop {
+        let frame = match reader.next_frame(None) {
+            Ok(frame) => frame,
+            Err(error) => {
+                eprintln!("[DEBUG-7c1e] client.read_loop ends: {error:?}");
+                break;
+            }
+        };
         if frame.frame_type == FrameType::Pong {
             if let Some(rtt) = rtt_millis(&frame.payload, now_millis()) {
                 handler.on_pong(rtt);

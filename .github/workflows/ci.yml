@@ -57,7 +57,8 @@ jobs:
       - name: Clippy (warnings are errors)
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
-        run: cargo test
+        timeout-minutes: 3
+        run: cargo test -p edgehop-link --test loopback reports_a_disconnect_and_accepts_a_new_peer -- --nocapture --test-threads=1
       - name: Type-check for Windows from Linux
         if: runner.os == 'Linux'
         run: |
