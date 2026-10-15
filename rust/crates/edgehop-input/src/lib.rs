@@ -12,8 +12,10 @@
 
 mod injector;
 mod os;
+mod platform;
 mod pointer;
 
 pub use injector::{Injector, DEFAULT_IDLE_RESYNC, DEFAULT_WARP_THRESHOLD};
 pub use os::OsInput;
+pub use platform::{CaptureHandle, CaptureSink, MotionMapper, Platform, PlatformError};
 pub use pointer::{PointerState, Rect};
