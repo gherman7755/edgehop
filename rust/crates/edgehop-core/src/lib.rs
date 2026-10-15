@@ -8,6 +8,7 @@
 //!
 //! Everything here is platform-independent and unit-tested on any machine.
 
+pub mod backend;
 pub mod ipc;
 pub mod params;
 
