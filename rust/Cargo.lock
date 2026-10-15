@@ -67,6 +67,9 @@ name = "edgehop-input"
 version = "0.1.0"
 dependencies = [
  "edgehop-proto",
+]
+
+[[package]]
 name = "edgehop-link"
 version = "0.1.0"
 dependencies = [
