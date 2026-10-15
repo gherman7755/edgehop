@@ -68,6 +68,26 @@ jobs:
         timeout-minutes: 1
         continue-on-error: true
         run: cargo test -p edgehop-link --test loopback -- --nocapture
+      - name: Tests (all in parallel, attempt 4)
+        timeout-minutes: 1
+        continue-on-error: true
+        run: cargo test -p edgehop-link --test loopback -- --nocapture
+      - name: Tests (all in parallel, attempt 5)
+        timeout-minutes: 1
+        continue-on-error: true
+        run: cargo test -p edgehop-link --test loopback -- --nocapture
+      - name: Tests (all in parallel, attempt 6)
+        timeout-minutes: 1
+        continue-on-error: true
+        run: cargo test -p edgehop-link --test loopback -- --nocapture
+      - name: Tests (all in parallel, attempt 7)
+        timeout-minutes: 1
+        continue-on-error: true
+        run: cargo test -p edgehop-link --test loopback -- --nocapture
+      - name: Tests (all in parallel, attempt 8)
+        timeout-minutes: 1
+        continue-on-error: true
+        run: cargo test -p edgehop-link --test loopback -- --nocapture
       - name: Type-check for Windows from Linux
         if: runner.os == 'Linux'
         run: |

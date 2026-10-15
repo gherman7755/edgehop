@@ -22,12 +22,21 @@ pub(crate) fn now_millis() -> u64 {
 /// Serialises writes from several threads onto one socket.
 pub(crate) struct FrameWriter {
     stream: Mutex<TcpStream>,
+    tag: String,
+}
+
+fn tag_of(stream: &TcpStream) -> String {
+    let local = stream.local_addr().map(|a| a.port()).unwrap_or(0);
+    let peer = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
+    format!("{local}->{peer}")
 }
 
 impl FrameWriter {
     pub(crate) fn new(stream: TcpStream) -> Self {
+        let tag = tag_of(&stream);
         Self {
             stream: Mutex::new(stream),
+            tag,
         }
     }
 
@@ -38,7 +47,11 @@ impl FrameWriter {
     }
 
     pub(crate) fn shutdown(&self) {
-        let _ = lock(&self.stream).shutdown(Shutdown::Both);
+        let result = lock(&self.stream).shutdown(Shutdown::Both);
+        eprintln!(
+            "[DEBUG-7c1e] sock {} shutdown(Both) -> {result:?}",
+            self.tag
+        );
     }
 }
 
@@ -54,6 +67,7 @@ pub(crate) enum ReadError {
 }
 
 pub(crate) struct FrameReader {
+    tag: String,
     stream: TcpStream,
     decoder: FrameDecoder,
     queue: VecDeque<Frame>,
@@ -62,6 +76,7 @@ pub(crate) struct FrameReader {
 impl FrameReader {
     pub(crate) fn new(stream: TcpStream) -> Self {
         Self {
+            tag: tag_of(&stream),
             stream,
             decoder: FrameDecoder::new(),
             queue: VecDeque::new(),
@@ -85,10 +100,20 @@ impl FrameReader {
                     Some(remaining.max(Duration::from_millis(1)))
                 }
             };
-            self.stream
-                .set_read_timeout(timeout)
-                .map_err(ReadError::Io)?;
-            match self.stream.read(&mut buffer) {
+            if let Err(e) = self.stream.set_read_timeout(timeout) {
+                eprintln!(
+                    "[DEBUG-7c1e] sock {} set_read_timeout({timeout:?}) failed: {e:?}",
+                    self.tag
+                );
+                return Err(ReadError::Io(e));
+            }
+            let outcome = self.stream.read(&mut buffer);
+            eprintln!(
+                "[DEBUG-7c1e] sock {} read -> {:?}",
+                self.tag,
+                outcome.as_ref().map(|n| *n).map_err(|e| e.kind())
+            );
+            match outcome {
                 Ok(0) => return Err(ReadError::Closed),
                 Ok(n) => self
                     .queue
