@@ -10,6 +10,10 @@
 //! The operating system is reached through the small [`OsInput`] trait, so all of this is unit-tested on any
 //! machine with a fake. `edgehop-win` implements the trait for Windows.
 
+mod injector;
+mod os;
 mod pointer;
 
+pub use injector::{Injector, DEFAULT_IDLE_RESYNC, DEFAULT_WARP_THRESHOLD};
+pub use os::OsInput;
 pub use pointer::{PointerState, Rect};
