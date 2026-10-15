@@ -9,6 +9,7 @@
 //! Everything here is platform-independent and unit-tested on any machine.
 
 pub mod ipc;
+pub mod params;
 
 /// Version reported by `core.hello`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
