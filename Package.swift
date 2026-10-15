@@ -7,10 +7,12 @@ let package = Package(
     products: [
         .library(name: "EdgeHopCore", targets: ["EdgeHopCore"]),
         .executable(name: "edgehop-tap", targets: ["edgehop-tap"]),
+        .executable(name: "edgehop-inject", targets: ["edgehop-inject"]),
     ],
     targets: [
         .target(name: "EdgeHopCore"),
         .executableTarget(name: "edgehop-tap", dependencies: ["EdgeHopCore"]),
+        .executableTarget(name: "edgehop-inject", dependencies: ["EdgeHopCore"]),
         .testTarget(name: "EdgeHopCoreTests", dependencies: ["EdgeHopCore"]),
     ]
 )
