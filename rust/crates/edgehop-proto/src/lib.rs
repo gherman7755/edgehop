@@ -4,8 +4,12 @@
 //! are checked against the Swift implementation (`tests/golden.json`).
 
 mod event;
+mod frame;
 
 pub use event::{InputEvent, Modifiers, MouseButton, RecordError, RECORD_SIZE};
+pub use frame::{
+    encode_frame, Frame, FrameDecoder, FrameError, FrameType, HEADER_SIZE, MAGIC, MAX_PAYLOAD,
+};
 
 /// Default TCP port of a receiver.
 pub const DEFAULT_PORT: u16 = 47474;
