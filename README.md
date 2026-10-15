@@ -30,6 +30,8 @@ network you trust. No license has been chosen yet (all rights reserved by defaul
 | `scripts/ipc-smoke.mjs` | End-to-end check of a core from a real (Node) client; works against the Swift and the Rust core |
 | `scripts/ipc-conformance.mjs` | Sends the same requests to two cores (Swift, Rust) and requires identical responses |
 | `rust/` | Rust workspace for the Windows core. `crates/edgehop-proto`: wire protocol (frames, records, handshake). `crates/edgehop-core`: the core process (IPC server, service, backend trait, stub backend) |
+| `rust/crates/edgehop-link` | The Rust TCP link: token-authenticated server and client on `edgehop-proto` (std threads, no async runtime) |
+| `scripts/check-link-interop.sh` | Swift and Rust links must interoperate over real TCP, both directions |
 | `scripts/golden-vectors.sh`, `scripts/check-rust-compat.sh` | Cross-language wire checks between the Swift core and the Rust crate |
 | `Sources/EdgeHopCore/Link.swift` | M4 plaintext TCP link: `LinkServer`/`LinkClient`, token challenge-response, hello/ping/input frames, `PanicChord` |
 | `Sources/edgehop-link/` | `token`, `serve`, `connect HOST`: mirror mouse input to another Mac |
@@ -98,12 +100,15 @@ scripts/golden-vectors.sh gen > rust/crates/edgehop-proto/tests/golden.json   # 
 (cd rust && cargo build -p edgehop-core)
 node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core --stub              # "--platform windows" on Windows
 node scripts/ipc-conformance.mjs .build/debug/edgehop-core rust/target/debug/edgehop-core
+scripts/check-link-interop.sh                       # Rust controller <-> Swift receiver and Swift controller <-> Rust receiver
 ```
 The golden vectors in `edgehop-proto` are produced by the Swift implementation, and the conformance script
 requires the two cores to answer 43 requests (errors included) identically.
 
 The Rust core's session backend is a stub for now: every IPC method works, but starting a controller or receiver
-returns an `internal` error until the network link and the Windows input layer (hooks, `SendInput`, displays) exist.
+returns an `internal` error. The pieces to replace it exist or are next: the TCP link (`edgehop-link`, done: server and
+client with the token handshake, 13 loopback tests, interoperating with the Swift link in both directions) and the
+Windows input layer (hooks, `SendInput`, displays), which is what the backend will be wired to.
 
 ## Two-Mac test (M4)
 
@@ -148,7 +153,8 @@ Everything is unencrypted: do it on a trusted network, with keys off.
 6. 🟨 **Core IPC (UI to core):** implemented for macOS (`edgehop-core`, `docs/IPC.md`, 14 unit tests and the
    Node smoke test). Rust core for Windows: wire protocol crate (27 tests, byte-compatible with Swift in both
    directions) and the core process speaking the IPC (28 tests, stub session backend, identical to the Swift core
-   on 43 conformance requests). Next: the network link, then the Windows input layer, then the Electron UI.
+   on 43 conformance requests); TCP link crate (13 loopback tests, interoperates with the Swift link both ways).
+   Next: the Windows input layer and the session backend that joins link and input, then the Electron UI.
 7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
    Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
 8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.
