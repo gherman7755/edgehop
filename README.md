@@ -155,6 +155,17 @@ Everything is unencrypted: do it on a trusted network, with keys off.
 9. ⬜ **M8 polish:** `PeerHello` with monitor geometry, layout sync with a revision, sleep-gap detection,
    reconnect, ping/pong latency, tap re-enable stress test.
 
+## Releases and CI
+
+* `main` is protected: changes land through pull requests only (no direct pushes, no force pushes, also for admins).
+* `.github/workflows/ci.yml` runs on every pull request: the Swift build and tests and the Swift IPC smoke test on
+  macOS, the cross-language wire check and the Swift/Rust conformance check, and the Rust format, clippy and tests
+  on Linux and on **Windows** (where the Rust core is also built and smoke-tested).
+* Releases are DMGs for Apple Silicon Macs, published as pre-releases (latest: `v0.1.0`). To cut one: bump
+  `CFBundleShortVersionString` in `Resources/Info.plist`, merge that, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+  `.github/workflows/release.yml` builds the DMG on a macOS runner and publishes it with a checksum. Running that
+  workflow by hand (Actions tab) builds the DMG as a workflow artifact without publishing.
+
 ## Safety notes
 
 * An active tap that swallows events can lock out your own input if there is a bug. Keep the log-only
