@@ -6,9 +6,11 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "EdgeHopCore", targets: ["EdgeHopCore"]),
+        .executable(name: "edgehop-tap", targets: ["edgehop-tap"]),
     ],
     targets: [
         .target(name: "EdgeHopCore"),
+        .executableTarget(name: "edgehop-tap", dependencies: ["EdgeHopCore"]),
         .testTarget(name: "EdgeHopCoreTests", dependencies: ["EdgeHopCore"]),
     ]
 )
