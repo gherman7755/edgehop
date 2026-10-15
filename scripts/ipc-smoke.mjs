@@ -1,10 +1,20 @@
 // End-to-end check of the core IPC (docs/IPC.md) from a real client, the way the Electron UI will use it.
-//   node scripts/ipc-smoke.mjs [path/to/edgehop-core]
+// Works against any core (Swift on macOS, Rust on Windows).
+//   node scripts/ipc-smoke.mjs [path/to/edgehop-core] [--platform macos|windows] [--stub]
+// --stub: the core has no session backend yet (the Rust core until its network layer exists), so starting a
+// session must fail with `internal` instead of producing connection events.
 // Starts no listener and needs no permissions: it uses an unreachable address to exercise events.
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
-const bin = process.argv[2] ?? '.build/debug/edgehop-core';
+const argv = process.argv.slice(2);
+const option = name => {
+	const i = argv.indexOf(name);
+	return i >= 0 ? argv[i + 1] : undefined;
+};
+const platform = option('--platform') ?? 'macos';
+const stub = argv.includes('--stub');
+const bin = argv.find((a, i) => !a.startsWith('--') && argv[i - 1] !== '--platform') ?? '.build/debug/edgehop-core';
 let failures = 0;
 const check = (ok, label, extra = '') => {
 	console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${ok || !extra ? '' : ` -> ${extra}`}`);
@@ -49,7 +59,7 @@ const until = async (predicate, ms) => {
 
 try {
 	const hello = await request('core.hello');
-	check(hello.result?.ipcVersion === 1 && hello.result?.platform === 'macos', 'core.hello', JSON.stringify(hello));
+	check(hello.result?.ipcVersion === 1 && hello.result?.platform === platform, `core.hello (platform ${platform})`, JSON.stringify(hello));
 
 	const token = await request('token.generate');
 	check(token.result?.token?.length === 20, 'token.generate');
@@ -70,16 +80,26 @@ try {
 	const invalid = await request('controller.start', { token: 'short', host: '192.0.2.1' });
 	check(invalid.error?.code === 'invalid_params', 'controller.start validates params', JSON.stringify(invalid));
 
-	// Real session lifecycle without permissions: 192.0.2.1 (TEST-NET-1) never answers.
-	const start = await request('controller.start', { token: token.result.token, host: '192.0.2.1', switching: false });
-	check(start.result !== undefined && !start.error, 'controller.start accepted', JSON.stringify(start));
-	check(await until(() => events.some(e => e.event === 'controller.state' && e.data.state === 'connecting'), 2000), 'event: controller.state connecting');
-	const busy = await request('controller.start', { token: token.result.token, host: '192.0.2.1' });
-	check(busy.error?.code === 'busy', 'second controller.start is busy', JSON.stringify(busy));
-	check(await until(() => events.some(e => e.event === 'controller.state' && e.data.state === 'failed'), 15000), 'event: controller.state failed (after ~8 s)');
-	const failed = events.find(e => e.event === 'controller.state' && e.data.state === 'failed');
-	check(typeof failed?.data.message === 'string' && failed.data.message.length > 0, 'failure carries a readable message', failed?.data.message);
-	check(events.some(e => e.event === 'log' && e.data.source === 'controller'), 'event: log lines arrive');
+	if (stub) {
+		// No session backend: starting must be refused cleanly, never hang or crash.
+		const controller = await request('controller.start', { token: token.result.token, host: '192.0.2.1' });
+		check(controller.error?.code === 'internal', 'controller.start is refused (no session backend)', JSON.stringify(controller));
+		const receiver = await request('receiver.start', { token: token.result.token });
+		check(receiver.error?.code === 'internal', 'receiver.start is refused (no session backend)', JSON.stringify(receiver));
+		const state = await request('controller.state');
+		check(state.result?.state === 'idle', 'controller stays idle after a refused start');
+	} else {
+		// Real session lifecycle without permissions: 192.0.2.1 (TEST-NET-1) never answers.
+		const start = await request('controller.start', { token: token.result.token, host: '192.0.2.1', switching: false });
+		check(start.result !== undefined && !start.error, 'controller.start accepted', JSON.stringify(start));
+		check(await until(() => events.some(e => e.event === 'controller.state' && e.data.state === 'connecting'), 2000), 'event: controller.state connecting');
+		const busy = await request('controller.start', { token: token.result.token, host: '192.0.2.1' });
+		check(busy.error?.code === 'busy', 'second controller.start is busy', JSON.stringify(busy));
+		check(await until(() => events.some(e => e.event === 'controller.state' && e.data.state === 'failed'), 15000), 'event: controller.state failed (after ~8 s)');
+		const failed = events.find(e => e.event === 'controller.state' && e.data.state === 'failed');
+		check(typeof failed?.data.message === 'string' && failed.data.message.length > 0, 'failure carries a readable message', failed?.data.message);
+		check(events.some(e => e.event === 'log' && e.data.source === 'controller'), 'event: log lines arrive');
+	}
 
 	const shutdown = await request('core.shutdown');
 	check(shutdown.result !== undefined, 'core.shutdown answered');

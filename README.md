@@ -27,7 +27,10 @@ network you trust. No license has been chosen yet (all rights reserved by defaul
 | `docs/PROTOCOL.md` | Wire protocol, for other implementations (e.g. Windows) |
 | `docs/IPC.md` | The local UI-to-core API (newline-delimited JSON over stdin/stdout) |
 | `Sources/EdgeHopIPC/`, `Sources/edgehop-core/` | The core as a headless helper process implementing that API |
-| `scripts/ipc-smoke.mjs` | End-to-end check of the helper from a real (Node) client |
+| `scripts/ipc-smoke.mjs` | End-to-end check of a core from a real (Node) client; works against the Swift and the Rust core |
+| `scripts/ipc-conformance.mjs` | Sends the same requests to two cores (Swift, Rust) and requires identical responses |
+| `rust/` | Rust workspace for the Windows core. `crates/edgehop-proto`: wire protocol (frames, records, handshake). `crates/edgehop-core`: the core process (IPC server, service, backend trait, stub backend) |
+| `scripts/golden-vectors.sh`, `scripts/check-rust-compat.sh` | Cross-language wire checks between the Swift core and the Rust crate |
 | `Sources/EdgeHopCore/Link.swift` | M4 plaintext TCP link: `LinkServer`/`LinkClient`, token challenge-response, hello/ping/input frames, `PanicChord` |
 | `Sources/edgehop-link/` | `token`, `serve`, `connect HOST`: mirror mouse input to another Mac |
 | `scripts/deploy.sh` | Build release `edgehop-link` and `scp` it to the other Mac |
@@ -78,6 +81,30 @@ printf '{"id":1,"method":"core.hello"}\n' | .build/debug/edgehop-core
 ```
 If the UI dies, the helper's stdin closes and it stops every session and gives the cursor back.
 
+## Rust core (Windows)
+
+A second implementation of the core, in Rust, so the same UI can drive Windows. `edgehop-proto` is the wire
+protocol and `edgehop-core` is the process speaking `docs/IPC.md`; both are platform-independent logic, tested on
+any machine, and type-check for Windows.
+
+```bash
+export PATH=/opt/homebrew/opt/rustup/bin:$PATH      # Homebrew's rustup is keg-only
+cd rust && cargo test                               # unit tests + byte-compatibility with the Swift core
+cargo clippy --all-targets -- -D warnings
+cargo check --target x86_64-pc-windows-msvc         # type-checks for Windows from any machine
+cd .. && scripts/check-rust-compat.sh               # Swift must accept everything Rust writes
+scripts/golden-vectors.sh gen > rust/crates/edgehop-proto/tests/golden.json   # regenerate if the protocol changes
+
+(cd rust && cargo build -p edgehop-core)
+node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core --stub              # "--platform windows" on Windows
+node scripts/ipc-conformance.mjs .build/debug/edgehop-core rust/target/debug/edgehop-core
+```
+The golden vectors in `edgehop-proto` are produced by the Swift implementation, and the conformance script
+requires the two cores to answer 43 requests (errors included) identically.
+
+The Rust core's session backend is a stub for now: every IPC method works, but starting a controller or receiver
+returns an `internal` error until the network link and the Windows input layer (hooks, `SendInput`, displays) exist.
+
 ## Two-Mac test (M4)
 
 ```bash
@@ -119,7 +146,9 @@ Everything is unencrypted: do it on a trusted network, with keys off.
    back (and re-couple the cursor). Needs one two-Mac run to mark done. Not done yet: hiding the local cursor
    (the original uses a private CGS call), drags across the edge, multi-display edges, dead corners in the CLI.
 6. 🟨 **Core IPC (UI to core):** implemented for macOS (`edgehop-core`, `docs/IPC.md`, 14 unit tests and the
-   Node smoke test). Next: Rust core for Windows against the same API, then the Electron UI.
+   Node smoke test). Rust core for Windows: wire protocol crate (27 tests, byte-compatible with Swift in both
+   directions) and the core process speaking the IPC (28 tests, stub session backend, identical to the Swift core
+   on 43 conformance requests). Next: the network link, then the Windows input layer, then the Electron UI.
 7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
    Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
 8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.

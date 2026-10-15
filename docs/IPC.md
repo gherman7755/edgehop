@@ -76,5 +76,7 @@ where the other computer sits), `switching` (default `true`; `false` mirrors the
 * Answer `core.hello` without side effects (no prompts, no network).
 * Start discovery only after `peers.watch {enabled: true}` (it triggers the macOS Local Network prompt).
 * Events may arrive between a request and its response; match responses by `id`.
+* Check a core with `scripts/ipc-smoke.mjs` (real client) and `scripts/ipc-conformance.mjs` (differential: two cores
+  must give identical responses to the same requests).
 * Keep the same names on every platform. Platform differences go in `core.hello.platform` and in which
   permissions exist (on Windows `permissions.get` returns both as `true`).
