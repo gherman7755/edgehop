@@ -13,6 +13,11 @@
 
 mod displays;
 mod dpi;
+mod output;
 
 pub use displays::list_monitors;
 pub use dpi::ensure_dpi_aware;
+pub use output::WinOutput;
+
+/// Written to `dwExtraInfo` of every event we inject ("EHOP"); our own capture ignores events carrying it.
+pub const MARKER: usize = 0x4548_4F50;
