@@ -46,6 +46,7 @@ impl ClientConfig {
 }
 
 pub struct LinkClient {
+    port: u16,
     writer: Arc<FrameWriter>,
     reader: Mutex<Option<JoinHandle<()>>>,
 }
@@ -96,10 +97,11 @@ impl LinkClient {
         let thread_writer = Arc::clone(&writer);
         let handle = thread::Builder::new()
             .name("edgehop-link-client".into())
-            .spawn(move || read_loop(reader, &thread_writer, handler.as_ref()))
+            .spawn(move || read_loop(reader, &thread_writer, handler.as_ref(), port))
             .map_err(|e| LinkError::Connection(e.to_string()))?;
         Ok((
             Self {
+                port,
                 writer,
                 reader: Mutex::new(Some(handle)),
             },
@@ -126,14 +128,17 @@ impl LinkClient {
 
     /// Closes the connection. Idempotent.
     pub fn close(&self) {
-        eprintln!("[DEBUG-7c1e] client.close: shutting down");
+        eprintln!("[DEBUG-7c1e] cli->{} close: shutting down", self.port);
         self.writer.shutdown();
-        eprintln!("[DEBUG-7c1e] client.close: shut down, joining reader");
+        eprintln!(
+            "[DEBUG-7c1e] cli->{} close: shut down, joining reader",
+            self.port
+        );
         if let Some(handle) = lock(&self.reader).take() {
             // `on_closed` runs on the reader thread and may drop the client: never join ourselves.
             if handle.thread().id() != thread::current().id() {
                 let _ = handle.join();
-                eprintln!("[DEBUG-7c1e] client.close: reader joined");
+                eprintln!("[DEBUG-7c1e] cli->{} close: reader joined", self.port);
             }
         }
     }
@@ -191,12 +196,17 @@ fn next(
     })
 }
 
-fn read_loop(mut reader: FrameReader, writer: &FrameWriter, handler: &dyn ClientHandler) {
+fn read_loop(
+    mut reader: FrameReader,
+    writer: &FrameWriter,
+    handler: &dyn ClientHandler,
+    port: u16,
+) {
     loop {
         let frame = match reader.next_frame(None) {
             Ok(frame) => frame,
             Err(error) => {
-                eprintln!("[DEBUG-7c1e] client.read_loop ends: {error:?}");
+                eprintln!("[DEBUG-7c1e] cli->{port} read_loop ends: {error:?}");
                 break;
             }
         };

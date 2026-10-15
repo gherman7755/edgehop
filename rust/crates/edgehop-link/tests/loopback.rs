@@ -212,20 +212,21 @@ fn delivers_control_messages() {
 
 #[test]
 fn reports_a_disconnect_and_accepts_a_new_peer() {
-    eprintln!("[DEBUG-7c1e] test: start");
     let (server, recorder) = start_server(Duration::from_secs(5));
+    let port = server.port();
+    eprintln!("[DEBUG-7c1e] TEST srv:{port}: start");
     let (first, _, _) = connect(server.port(), TOKEN, "one").unwrap();
-    eprintln!("[DEBUG-7c1e] test: first connected (client side)");
+    eprintln!("[DEBUG-7c1e] TEST srv:{port}: first connected (client side)");
     wait_until("first connected", || {
         recorder.connected.lock().unwrap().len() == 1
     });
-    eprintln!("[DEBUG-7c1e] test: first connected (server side), closing first");
+    eprintln!("[DEBUG-7c1e] TEST srv:{port}: first connected (server side), closing first");
     first.close();
-    eprintln!("[DEBUG-7c1e] test: first.close() returned");
+    eprintln!("[DEBUG-7c1e] TEST srv:{port}: first.close() returned");
     wait_until("disconnect reported", || {
         recorder.disconnects.load(Ordering::SeqCst) == 1
     });
-    eprintln!("[DEBUG-7c1e] test: disconnect reported, connecting second");
+    eprintln!("[DEBUG-7c1e] TEST srv:{port}: disconnect reported, connecting second");
 
     let second = connect(server.port(), TOKEN, "two");
     eprintln!(
@@ -236,12 +237,12 @@ fn reports_a_disconnect_and_accepts_a_new_peer() {
     wait_until("second connected", || {
         recorder.connected.lock().unwrap().len() == 2
     });
-    eprintln!("[DEBUG-7c1e] test: second connected, asserting");
+    eprintln!("[DEBUG-7c1e] TEST srv:{port}: second connected, asserting");
     assert_eq!(
         *recorder.connected.lock().unwrap(),
         vec!["one".to_string(), "two".to_string()]
     );
-    eprintln!("[DEBUG-7c1e] test: body done, dropping");
+    eprintln!("[DEBUG-7c1e] TEST srv:{port}: body done, dropping");
 }
 
 #[test]
