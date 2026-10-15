@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "edgehop-inject", targets: ["edgehop-inject"]),
         .executable(name: "edgehop-link", targets: ["edgehop-link"]),
         .executable(name: "EdgeHopApp", targets: ["EdgeHopApp"]),
+        .executable(name: "edgehop-core", targets: ["edgehop-core"]),
     ],
     targets: [
         .target(name: "EdgeHopCore"),
@@ -19,6 +20,7 @@ let package = Package(
         .executableTarget(name: "edgehop-inject", dependencies: ["EdgeHopCore"]),
         .executableTarget(name: "edgehop-link", dependencies: ["EdgeHopCore"]),
         .executableTarget(name: "EdgeHopApp", dependencies: ["EdgeHopCore"]),
+        .executableTarget(name: "edgehop-core", dependencies: ["EdgeHopCore", "EdgeHopIPC"]),
         .testTarget(name: "EdgeHopCoreTests", dependencies: ["EdgeHopCore"]),
         .testTarget(name: "EdgeHopIPCTests", dependencies: ["EdgeHopIPC"]),
     ]
