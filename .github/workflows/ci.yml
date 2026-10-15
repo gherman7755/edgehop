@@ -60,6 +60,11 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo test
+      - name: Windows self-test (displays, injection, feedback guard; needs an interactive desktop)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        timeout-minutes: 2
+        run: cargo run -p edgehop-win --bin win-selftest
       - name: Type-check for Windows from Linux
         if: runner.os == 'Linux'
         run: |
