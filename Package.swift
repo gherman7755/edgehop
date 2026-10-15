@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "EdgeHopCore", targets: ["EdgeHopCore"]),
+        .library(name: "EdgeHopIPC", targets: ["EdgeHopIPC"]),
         .executable(name: "edgehop-tap", targets: ["edgehop-tap"]),
         .executable(name: "edgehop-inject", targets: ["edgehop-inject"]),
         .executable(name: "edgehop-link", targets: ["edgehop-link"]),
@@ -13,10 +14,12 @@ let package = Package(
     ],
     targets: [
         .target(name: "EdgeHopCore"),
+        .target(name: "EdgeHopIPC", dependencies: ["EdgeHopCore"]),
         .executableTarget(name: "edgehop-tap", dependencies: ["EdgeHopCore"]),
         .executableTarget(name: "edgehop-inject", dependencies: ["EdgeHopCore"]),
         .executableTarget(name: "edgehop-link", dependencies: ["EdgeHopCore"]),
         .executableTarget(name: "EdgeHopApp", dependencies: ["EdgeHopCore"]),
         .testTarget(name: "EdgeHopCoreTests", dependencies: ["EdgeHopCore"]),
+        .testTarget(name: "EdgeHopIPCTests", dependencies: ["EdgeHopIPC"]),
     ]
 )
