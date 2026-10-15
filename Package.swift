@@ -23,11 +23,15 @@ let package = Package(
         .executableTarget(name: "edgehop-core", dependencies: ["EdgeHopCore", "EdgeHopIPC"]),
         .executable(name: "edgehop-tap", targets: ["edgehop-tap"]),
         .executable(name: "edgehop-inject", targets: ["edgehop-inject"]),
+        .executable(name: "edgehop-link", targets: ["edgehop-link"]),
+        .executable(name: "EdgeHopApp", targets: ["EdgeHopApp"]),
     ],
     targets: [
         .target(name: "EdgeHopCore"),
         .executableTarget(name: "edgehop-tap", dependencies: ["EdgeHopCore"]),
         .executableTarget(name: "edgehop-inject", dependencies: ["EdgeHopCore"]),
+        .executableTarget(name: "edgehop-link", dependencies: ["EdgeHopCore"]),
+        .executableTarget(name: "EdgeHopApp", dependencies: ["EdgeHopCore"]),
         .testTarget(name: "EdgeHopCoreTests", dependencies: ["EdgeHopCore"]),
         .testTarget(name: "EdgeHopIPCTests", dependencies: ["EdgeHopIPC"]),
     ]
