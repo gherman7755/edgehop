@@ -1,0 +1,67 @@
+name: Release
+
+# Push a tag like v0.2.0 to build the macOS DMG and publish it as a pre-release.
+# Run it by hand (Actions tab, "Run workflow") to build the DMG as a workflow artifact without publishing.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS DMG (Apple Silicon)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version
+        id: version
+        run: |
+          plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [[ "$tag_version" != "$plist_version" ]]; then
+              echo "Tag $GITHUB_REF_NAME does not match CFBundleShortVersionString $plist_version in Resources/Info.plist" >&2
+              exit 1
+            fi
+          fi
+          echo "version=$plist_version" >> "$GITHUB_OUTPUT"
+
+      - name: Build the DMG
+        run: scripts/make-dmg.sh
+
+      - name: Name the artifact and write its checksum
+        run: |
+          mkdir -p out
+          cp dist/EdgeHop.dmg "out/EdgeHop-${{ steps.version.outputs.version }}-arm64.dmg"
+          (cd out && shasum -a 256 "EdgeHop-${{ steps.version.outputs.version }}-arm64.dmg" > SHA256SUMS)
+          sed "s/@VERSION@/${{ steps.version.outputs.version }}/g" .github/release-notes.md > out/NOTES.md
+          lipo -archs dist/EdgeHop.app/Contents/MacOS/EdgeHop
+          cat out/SHA256SUMS
+
+      - name: Keep the DMG as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EdgeHop-${{ steps.version.outputs.version }}-arm64
+          path: |
+            out/*.dmg
+            out/SHA256SUMS
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          files=(out/*.dmg out/SHA256SUMS)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+              --prerelease \
+              --title "EdgeHop ${{ steps.version.outputs.version }} (macOS, pre-release)" \
+              --notes-file out/NOTES.md
+          fi
