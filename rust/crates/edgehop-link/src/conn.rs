@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 use edgehop_proto::{encode_frame, Frame, FrameDecoder, FrameError};
 
 /// Locks a mutex, ignoring poisoning: the data is plain state and the caller is shutting a connection down.
+pub(crate) fn polling() -> bool {
+    std::env::var_os("EDGEHOP_POLL").is_some()
+}
+
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -22,21 +26,12 @@ pub(crate) fn now_millis() -> u64 {
 /// Serialises writes from several threads onto one socket.
 pub(crate) struct FrameWriter {
     stream: Mutex<TcpStream>,
-    tag: String,
-}
-
-fn tag_of(stream: &TcpStream) -> String {
-    let local = stream.local_addr().map(|a| a.port()).unwrap_or(0);
-    let peer = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
-    format!("{local}->{peer}")
 }
 
 impl FrameWriter {
     pub(crate) fn new(stream: TcpStream) -> Self {
-        let tag = tag_of(&stream);
         Self {
             stream: Mutex::new(stream),
-            tag,
         }
     }
 
@@ -47,11 +42,13 @@ impl FrameWriter {
     }
 
     pub(crate) fn shutdown(&self) {
-        let result = lock(&self.stream).shutdown(Shutdown::Both);
-        eprintln!(
-            "[DEBUG-7c1e] sock {} shutdown(Both) -> {result:?}",
-            self.tag
-        );
+        // EXPERIMENT: EDGEHOP_SHUTDOWN_WRITE=1 sends only the FIN instead of shutting both directions.
+        let how = if std::env::var_os("EDGEHOP_SHUTDOWN_WRITE").is_some() {
+            Shutdown::Write
+        } else {
+            Shutdown::Both
+        };
+        let _ = lock(&self.stream).shutdown(how);
     }
 }
 
@@ -67,7 +64,6 @@ pub(crate) enum ReadError {
 }
 
 pub(crate) struct FrameReader {
-    tag: String,
     stream: TcpStream,
     decoder: FrameDecoder,
     queue: VecDeque<Frame>,
@@ -76,10 +72,27 @@ pub(crate) struct FrameReader {
 impl FrameReader {
     pub(crate) fn new(stream: TcpStream) -> Self {
         Self {
-            tag: tag_of(&stream),
             stream,
             decoder: FrameDecoder::new(),
             queue: VecDeque::new(),
+        }
+    }
+
+    /// EXPERIMENT: like `next_frame(None)` but wakes every 200 ms to check `closing`, so a blocked read can
+    /// never outlive a close even if the OS does not abort it.
+    pub(crate) fn next_frame_polling(
+        &mut self,
+        closing: &std::sync::atomic::AtomicBool,
+    ) -> Result<Frame, ReadError> {
+        loop {
+            match self.next_frame(Some(Instant::now() + Duration::from_millis(200))) {
+                Err(ReadError::TimedOut) => {
+                    if closing.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Err(ReadError::Closed);
+                    }
+                }
+                other => return other,
+            }
         }
     }
 
@@ -100,20 +113,10 @@ impl FrameReader {
                     Some(remaining.max(Duration::from_millis(1)))
                 }
             };
-            if let Err(e) = self.stream.set_read_timeout(timeout) {
-                eprintln!(
-                    "[DEBUG-7c1e] sock {} set_read_timeout({timeout:?}) failed: {e:?}",
-                    self.tag
-                );
-                return Err(ReadError::Io(e));
-            }
-            let outcome = self.stream.read(&mut buffer);
-            eprintln!(
-                "[DEBUG-7c1e] sock {} read -> {:?}",
-                self.tag,
-                outcome.as_ref().map(|n| *n).map_err(|e| e.kind())
-            );
-            match outcome {
+            self.stream
+                .set_read_timeout(timeout)
+                .map_err(ReadError::Io)?;
+            match self.stream.read(&mut buffer) {
                 Ok(0) => return Err(ReadError::Closed),
                 Ok(n) => self
                     .queue

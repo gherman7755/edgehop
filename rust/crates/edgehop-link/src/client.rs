@@ -13,7 +13,9 @@ use edgehop_proto::{
     MonitorInfo,
 };
 
-use crate::conn::{lock, now_millis, FrameReader, FrameWriter, ReadError};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::conn::{lock, now_millis, polling, FrameReader, FrameWriter, ReadError};
 use crate::error::LinkError;
 
 /// Callbacks run on the reader thread.
@@ -46,7 +48,7 @@ impl ClientConfig {
 }
 
 pub struct LinkClient {
-    port: u16,
+    closing: Arc<AtomicBool>,
     writer: Arc<FrameWriter>,
     reader: Mutex<Option<JoinHandle<()>>>,
 }
@@ -94,14 +96,16 @@ impl LinkClient {
             return Err(LinkError::Rejected);
         }
 
+        let closing = Arc::new(AtomicBool::new(false));
+        let thread_closing = Arc::clone(&closing);
         let thread_writer = Arc::clone(&writer);
         let handle = thread::Builder::new()
             .name("edgehop-link-client".into())
-            .spawn(move || read_loop(reader, &thread_writer, handler.as_ref(), port))
+            .spawn(move || read_loop(reader, &thread_writer, handler.as_ref(), &thread_closing))
             .map_err(|e| LinkError::Connection(e.to_string()))?;
         Ok((
             Self {
-                port,
+                closing,
                 writer,
                 reader: Mutex::new(Some(handle)),
             },
@@ -128,17 +132,12 @@ impl LinkClient {
 
     /// Closes the connection. Idempotent.
     pub fn close(&self) {
-        eprintln!("[DEBUG-7c1e] cli->{} close: shutting down", self.port);
+        self.closing.store(true, Ordering::SeqCst);
         self.writer.shutdown();
-        eprintln!(
-            "[DEBUG-7c1e] cli->{} close: shut down, joining reader",
-            self.port
-        );
         if let Some(handle) = lock(&self.reader).take() {
             // `on_closed` runs on the reader thread and may drop the client: never join ourselves.
             if handle.thread().id() != thread::current().id() {
                 let _ = handle.join();
-                eprintln!("[DEBUG-7c1e] cli->{} close: reader joined", self.port);
             }
         }
     }
@@ -200,16 +199,14 @@ fn read_loop(
     mut reader: FrameReader,
     writer: &FrameWriter,
     handler: &dyn ClientHandler,
-    port: u16,
+    closing: &AtomicBool,
 ) {
-    loop {
-        let frame = match reader.next_frame(None) {
-            Ok(frame) => frame,
-            Err(error) => {
-                eprintln!("[DEBUG-7c1e] cli->{port} read_loop ends: {error:?}");
-                break;
-            }
-        };
+    let poll = polling();
+    while let Ok(frame) = if poll {
+        reader.next_frame_polling(closing)
+    } else {
+        reader.next_frame(None)
+    } {
         if frame.frame_type == FrameType::Pong {
             if let Some(rtt) = rtt_millis(&frame.payload, now_millis()) {
                 handler.on_pong(rtt);

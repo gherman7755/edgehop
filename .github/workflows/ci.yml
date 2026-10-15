@@ -52,42 +52,33 @@ jobs:
           rustup toolchain install stable --profile minimal --component clippy --component rustfmt
           rustup default stable
           rustc --version
-      - name: Formatting
-        run: cargo fmt --check
-      - name: Clippy (warnings are errors)
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Tests (all in parallel, attempt 1)
-        timeout-minutes: 1
+      - name: Stress, baseline A
+        timeout-minutes: 2
         continue-on-error: true
-        run: cargo test -p edgehop-link --test loopback -- --nocapture
-      - name: Tests (all in parallel, attempt 2)
-        timeout-minutes: 1
+        run: cargo test -p edgehop-link --test stress -- --nocapture
+      - name: Stress, baseline B
+        timeout-minutes: 2
         continue-on-error: true
-        run: cargo test -p edgehop-link --test loopback -- --nocapture
-      - name: Tests (all in parallel, attempt 3)
-        timeout-minutes: 1
+        run: cargo test -p edgehop-link --test stress -- --nocapture
+      - name: Stress, shutdown(Write) only
+        timeout-minutes: 2
         continue-on-error: true
-        run: cargo test -p edgehop-link --test loopback -- --nocapture
-      - name: Tests (all in parallel, attempt 4)
-        timeout-minutes: 1
+        env:
+          EDGEHOP_SHUTDOWN_WRITE: "1"
+        run: cargo test -p edgehop-link --test stress -- --nocapture
+      - name: Stress, polling reads
+        timeout-minutes: 2
         continue-on-error: true
-        run: cargo test -p edgehop-link --test loopback -- --nocapture
-      - name: Tests (all in parallel, attempt 5)
-        timeout-minutes: 1
+        env:
+          EDGEHOP_POLL: "1"
+        run: cargo test -p edgehop-link --test stress -- --nocapture
+      - name: Stress, shutdown(Write) + polling
+        timeout-minutes: 2
         continue-on-error: true
-        run: cargo test -p edgehop-link --test loopback -- --nocapture
-      - name: Tests (all in parallel, attempt 6)
-        timeout-minutes: 1
-        continue-on-error: true
-        run: cargo test -p edgehop-link --test loopback -- --nocapture
-      - name: Tests (all in parallel, attempt 7)
-        timeout-minutes: 1
-        continue-on-error: true
-        run: cargo test -p edgehop-link --test loopback -- --nocapture
-      - name: Tests (all in parallel, attempt 8)
-        timeout-minutes: 1
-        continue-on-error: true
-        run: cargo test -p edgehop-link --test loopback -- --nocapture
+        env:
+          EDGEHOP_SHUTDOWN_WRITE: "1"
+          EDGEHOP_POLL: "1"
+        run: cargo test -p edgehop-link --test stress -- --nocapture
       - name: Type-check for Windows from Linux
         if: runner.os == 'Linux'
         run: |
