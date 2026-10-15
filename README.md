@@ -28,6 +28,8 @@ network you trust. No license has been chosen yet (all rights reserved by defaul
 | `docs/IPC.md` | The local UI-to-core API (newline-delimited JSON over stdin/stdout) |
 | `Sources/EdgeHopIPC/`, `Sources/edgehop-core/` | The core as a headless helper process implementing that API |
 | `scripts/ipc-smoke.mjs` | End-to-end check of the helper from a real (Node) client |
+| `rust/` | Rust workspace for the Windows core. `crates/edgehop-proto`: wire protocol (frames, records, handshake) |
+| `scripts/golden-vectors.sh`, `scripts/check-rust-compat.sh` | Cross-language wire checks between the Swift core and the Rust crate |
 | `Sources/EdgeHopCore/Link.swift` | M4 plaintext TCP link: `LinkServer`/`LinkClient`, token challenge-response, hello/ping/input frames, `PanicChord` |
 | `Sources/edgehop-link/` | `token`, `serve`, `connect HOST`: mirror mouse input to another Mac |
 | `scripts/deploy.sh` | Build release `edgehop-link` and `scp` it to the other Mac |
@@ -78,6 +80,19 @@ printf '{"id":1,"method":"core.hello"}\n' | .build/debug/edgehop-core
 ```
 If the UI dies, the helper's stdin closes and it stops every session and gives the cursor back.
 
+## Rust core (Windows)
+
+```bash
+export PATH=/opt/homebrew/opt/rustup/bin:$PATH      # Homebrew's rustup is keg-only
+cd rust && cargo test                               # unit tests + byte-compatibility with the Swift core
+cargo clippy --all-targets -- -D warnings
+cargo check --target x86_64-pc-windows-msvc         # type-checks for Windows from any machine
+cd .. && scripts/check-rust-compat.sh               # Swift must accept everything Rust writes
+scripts/golden-vectors.sh gen > rust/crates/edgehop-proto/tests/golden.json   # regenerate if the protocol changes
+```
+`edgehop-proto` holds only platform-independent logic, so it is tested on any machine; its test vectors are
+produced by the Swift implementation. The Windows platform layer (hooks, `SendInput`, displays) comes next.
+
 ## Two-Mac test (M4)
 
 ```bash
@@ -119,7 +134,8 @@ Everything is unencrypted: do it on a trusted network, with keys off.
    back (and re-couple the cursor). Needs one two-Mac run to mark done. Not done yet: hiding the local cursor
    (the original uses a private CGS call), drags across the edge, multi-display edges, dead corners in the CLI.
 6. 🟨 **Core IPC (UI to core):** implemented for macOS (`edgehop-core`, `docs/IPC.md`, 14 unit tests and the
-   Node smoke test). Next: Rust core for Windows against the same API, then the Electron UI.
+   Node smoke test). Rust core for Windows: wire protocol crate done (27 tests, byte-compatible with Swift
+   in both directions); next the core process speaking the IPC, then the Windows input layer, then the Electron UI.
 7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
    Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
 8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.
