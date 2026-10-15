@@ -54,6 +54,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "edgehop-core"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "edgehop-proto"
 version = "0.1.0"
 dependencies = [
