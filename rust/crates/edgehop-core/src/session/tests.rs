@@ -124,6 +124,10 @@ impl CaptureHandle for FakeCapture {
             .push(format!("leave {} {}", to.0, to.1));
     }
 
+    fn cursor_position(&self) -> Option<(f64, f64)> {
+        Some((400.0, 300.0))
+    }
+
     fn stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         self.calls
@@ -801,4 +805,48 @@ fn stopping_while_connecting_is_final() {
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(backend.controller_state(), ControllerState::Idle);
     assert_eq!(buffer.states("controller.state"), ["connecting", "idle"]);
+}
+
+#[test]
+fn debug_logs_show_where_the_local_cursor_really_is_while_remote() {
+    let rig = Rig::new(false);
+    let mut config = rig.config(TOKEN, true, false);
+    config.debug = true;
+    rig.controller
+        .start_controller(config, rig.controller_events.0.clone())
+        .unwrap();
+    wait_until("the controller to connect", || {
+        matches!(
+            rig.controller.controller_state(),
+            ControllerState::Connected { .. }
+        )
+    });
+    let capture = rig
+        .controller_capture
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("capture started");
+    right_edge_push(&capture);
+    capture.sink.motion((410.0, 300.0), (10.0, 0.0));
+
+    let lines: Vec<String> = rig
+        .controller_events
+        .1
+        .events("log")
+        .iter()
+        .filter_map(|data| data["line"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("-> REMOTE (receiver-pc); local cursor now at (400, 300)")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.starts_with(
+            "motion #2 pos=(410, 300) delta=(10, 0) local cursor=(400, 300) slowest="
+        )),
+        "{lines:?}"
+    );
 }
