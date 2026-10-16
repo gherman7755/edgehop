@@ -338,6 +338,33 @@ fn reports_a_disconnect_and_accepts_a_new_peer() {
     );
 }
 
+/// A controller that goes away must be noticed every single time, quickly: the receiver is only usable again after
+/// that. (Found on Windows, where the encrypted link once in about forty runs of the session tests left the receiver
+/// "connected" for good after the controller had stopped.)
+#[test]
+fn a_closed_client_is_noticed_every_time() {
+    let (server, recorder) = start_server(Duration::from_secs(5));
+    let mut worst = Duration::ZERO;
+    for round in 0..150 {
+        let (client, _, _) =
+            connect(server.port(), TOKEN, "cli").unwrap_or_else(|e| panic!("round {round}: {e}"));
+        wait_until("connected", || {
+            recorder.connected.lock().unwrap().len() == round + 1
+        });
+        let closed_at = Instant::now();
+        client.close();
+        drop(client);
+        wait_until("the closed client to be noticed", || {
+            recorder.disconnects.load(Ordering::SeqCst) == round + 1
+        });
+        worst = worst.max(closed_at.elapsed());
+    }
+    assert!(
+        worst < Duration::from_secs(1),
+        "the slowest notice took {worst:?}"
+    );
+}
+
 #[test]
 fn refuses_a_second_concurrent_peer() {
     let (server, recorder) = start_server(Duration::from_secs(5));
