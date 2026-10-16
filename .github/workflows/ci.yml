@@ -60,10 +60,10 @@ jobs:
         env:
           EDGEHOP_SMOKE: "1"
           EDGEHOP_USER_DATA: ${{ runner.temp }}/edgehop-ui-profile
-        run: npx electron .
+        run: scripts/run-smoke.sh npx electron .
       - name: Package the app and smoke test the package (bundled Swift core)
         working-directory: ui
-        timeout-minutes: 10
+        timeout-minutes: 6
         env:
           EDGEHOP_SMOKE: "1"
           EDGEHOP_USER_DATA: ${{ runner.temp }}/edgehop-pack-profile
@@ -71,7 +71,15 @@ jobs:
           mkdir -p core-bin
           cp ../.build/debug/edgehop-core core-bin/edgehop-core
           npm run pack
-          release/mac-arm64/EdgeHop.app/Contents/MacOS/EdgeHop
+          scripts/run-smoke.sh release/mac-arm64/EdgeHop.app/Contents/MacOS/EdgeHop
+      - name: A wedged exit is ended by the app's watchdog (macOS)
+        working-directory: ui
+        timeout-minutes: 2
+        env:
+          EDGEHOP_SMOKE: "1"
+          EDGEHOP_TEST_WEDGE_EXIT: "1"
+          EDGEHOP_USER_DATA: ${{ runner.temp }}/edgehop-wedge-profile
+        run: scripts/run-smoke.sh release/mac-arm64/EdgeHop.app/Contents/MacOS/EdgeHop
 
   rust:
     name: Rust (${{ matrix.os }})
@@ -143,11 +151,12 @@ jobs:
         env:
           EDGEHOP_SMOKE: "1"
           EDGEHOP_USER_DATA: ${{ runner.temp }}\edgehop-ui-profile
-        run: npx electron .
+        shell: bash
+        run: scripts/run-smoke.sh npx electron .
       - name: Package the app and smoke test the package (bundled Rust core)
         if: runner.os == 'Windows'
         working-directory: ui
-        timeout-minutes: 10
+        timeout-minutes: 6
         env:
           EDGEHOP_SMOKE: "1"
           EDGEHOP_USER_DATA: ${{ runner.temp }}\edgehop-pack-profile
@@ -156,4 +165,14 @@ jobs:
           mkdir -p core-bin
           cp ../rust/target/debug/edgehop-core.exe core-bin/edgehop-core.exe
           npm run pack
-          release/win-unpacked/EdgeHop.exe
+          scripts/run-smoke.sh release/win-unpacked/EdgeHop.exe
+      - name: A wedged exit is ended by the app's watchdog (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ui
+        timeout-minutes: 2
+        shell: bash
+        env:
+          EDGEHOP_SMOKE: "1"
+          EDGEHOP_TEST_WEDGE_EXIT: "1"
+          EDGEHOP_USER_DATA: ${{ runner.temp }}\edgehop-wedge-profile
+        run: scripts/run-smoke.sh release/win-unpacked/EdgeHop.exe

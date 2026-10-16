@@ -53,7 +53,7 @@ jobs:
         env:
           EDGEHOP_SMOKE: "1"
           EDGEHOP_USER_DATA: ${{ runner.temp }}/edgehop-release-profile
-        run: release/mac-arm64/EdgeHop.app/Contents/MacOS/EdgeHop
+        run: scripts/run-smoke.sh release/mac-arm64/EdgeHop.app/Contents/MacOS/EdgeHop
 
       - name: Checksum
         run: |
@@ -111,7 +111,8 @@ jobs:
         env:
           EDGEHOP_SMOKE: "1"
           EDGEHOP_USER_DATA: ${{ runner.temp }}\edgehop-release-profile
-        run: release\win-unpacked\EdgeHop.exe
+        shell: bash
+        run: scripts/run-smoke.sh release/win-unpacked/EdgeHop.exe
 
       - name: Checksum
         shell: bash
