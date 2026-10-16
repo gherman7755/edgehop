@@ -1,7 +1,8 @@
 name: Release
 
-# Push a tag like v0.2.0 to build the macOS DMG and publish it as a pre-release.
-# Run it by hand (Actions tab, "Run workflow") to build the DMG as a workflow artifact without publishing.
+# Push a tag like v0.2.0 to build the macOS and Windows apps and publish them as a pre-release.
+# Run it by hand (Actions tab, "Run workflow") to build both as workflow artifacts without publishing.
+# The version is `ui/package.json`; a tag must match it.
 on:
   push:
     tags: ['v*']
@@ -12,56 +13,145 @@ permissions:
 
 jobs:
   macos:
-    name: macOS DMG (Apple Silicon)
+    name: macOS app (Apple Silicon)
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
 
       - name: Work out the version
         id: version
         run: |
-          plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            tag_version="${GITHUB_REF_NAME#v}"
-            if [[ "$tag_version" != "$plist_version" ]]; then
-              echo "Tag $GITHUB_REF_NAME does not match CFBundleShortVersionString $plist_version in Resources/Info.plist" >&2
-              exit 1
-            fi
+          version="$(node -p "require('./ui/package.json').version")"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match the version $version in ui/package.json" >&2
+            exit 1
           fi
-          echo "version=$plist_version" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Build the DMG
-        run: scripts/make-dmg.sh
+      - name: Build the core (Swift, release)
+        run: |
+          swift build -c release --product edgehop-core
+          mkdir -p ui/core-bin
+          cp .build/release/edgehop-core ui/core-bin/edgehop-core
+          lipo -archs ui/core-bin/edgehop-core
 
-      - name: Name the artifact and write its checksum
+      - name: Build the app
+        working-directory: ui
+        run: |
+          npm ci
+          npm run dist
+
+      - name: Smoke test the packaged app (its own core, a throw-away profile)
+        working-directory: ui
+        timeout-minutes: 3
+        env:
+          EDGEHOP_SMOKE: "1"
+          EDGEHOP_USER_DATA: ${{ runner.temp }}/edgehop-release-profile
+        run: release/mac-arm64/EdgeHop.app/Contents/MacOS/EdgeHop
+
+      - name: Checksum
         run: |
           mkdir -p out
-          cp dist/EdgeHop.dmg "out/EdgeHop-${{ steps.version.outputs.version }}-arm64.dmg"
-          (cd out && shasum -a 256 "EdgeHop-${{ steps.version.outputs.version }}-arm64.dmg" > SHA256SUMS)
-          sed "s/@VERSION@/${{ steps.version.outputs.version }}/g" .github/release-notes.md > out/NOTES.md
-          lipo -archs dist/EdgeHop.app/Contents/MacOS/EdgeHop
-          cat out/SHA256SUMS
+          cp "ui/release/EdgeHop-${{ steps.version.outputs.version }}-mac-arm64.dmg" out/
+          (cd out && shasum -a 256 *.dmg > SHA256SUMS-macos)
+          cat out/SHA256SUMS-macos
 
-      - name: Keep the DMG as a workflow artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: EdgeHop-${{ steps.version.outputs.version }}-arm64
-          path: |
-            out/*.dmg
-            out/SHA256SUMS
+          name: EdgeHop-${{ steps.version.outputs.version }}-macos
+          path: out/*
 
-      - name: Publish the release
-        if: github.ref_type == 'tag'
+  windows:
+    name: Windows app (x64)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          version="$(node -p "require('./ui/package.json').version")"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match the version $version in ui/package.json" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build the core (Rust, release)
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo build --release --manifest-path rust/Cargo.toml -p edgehop-core
+          mkdir -p ui/core-bin
+          cp rust/target/release/edgehop-core.exe ui/core-bin/edgehop-core.exe
+
+      - name: Build the app
+        working-directory: ui
+        run: |
+          npm ci
+          npm run dist
+
+      - name: Smoke test the packaged app (its own core, a throw-away profile)
+        working-directory: ui
+        timeout-minutes: 3
+        env:
+          EDGEHOP_SMOKE: "1"
+          EDGEHOP_USER_DATA: ${{ runner.temp }}\edgehop-release-profile
+        run: release\win-unpacked\EdgeHop.exe
+
+      - name: Checksum
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "ui/release/EdgeHop-${{ steps.version.outputs.version }}-win-x64-setup.exe" out/
+          (cd out && sha256sum *.exe > SHA256SUMS-windows)
+          cat out/SHA256SUMS-windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EdgeHop-${{ steps.version.outputs.version }}-windows
+          path: out/*
+
+  publish:
+    name: Publish the release
+    needs: [macos, windows]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          files=(out/*.dmg out/SHA256SUMS)
+          version="${GITHUB_REF_NAME#v}"
+          cat artifacts/SHA256SUMS-macos artifacts/SHA256SUMS-windows > artifacts/SHA256SUMS
+          rm artifacts/SHA256SUMS-macos artifacts/SHA256SUMS-windows
+          sed "s/@VERSION@/${version}/g" .github/release-notes.md > artifacts/NOTES.md
+          ls -l artifacts
+          files=(artifacts/*.dmg artifacts/*.exe artifacts/SHA256SUMS)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "${files[@]}" \
               --prerelease \
-              --title "EdgeHop ${{ steps.version.outputs.version }} (macOS, pre-release)" \
-              --notes-file out/NOTES.md
+              --title "EdgeHop ${version} (macOS and Windows, pre-release)" \
+              --notes-file artifacts/NOTES.md
           fi

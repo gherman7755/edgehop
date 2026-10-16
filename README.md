@@ -184,10 +184,11 @@ Everything is unencrypted: do it on a trusted network, with keys off.
 * `.github/workflows/ci.yml` runs on every pull request: the Swift build and tests and the Swift IPC smoke test on
   macOS, the cross-language wire check and the Swift/Rust conformance check, and the Rust format, clippy and tests
   on Linux and on **Windows** (where the Rust core is also built and smoke-tested).
-* Releases are DMGs for Apple Silicon Macs, published as pre-releases (latest: `v0.1.0`). To cut one: bump
-  `CFBundleShortVersionString` in `Resources/Info.plist`, merge that, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
-  `.github/workflows/release.yml` builds the DMG on a macOS runner and publishes it with a checksum. Running that
-  workflow by hand (Actions tab) builds the DMG as a workflow artifact without publishing.
+* Releases are the Electron app for Apple Silicon Macs (DMG) and 64-bit Windows (installer), published as
+  pre-releases (latest: `v0.2.0`). To cut one: bump `version` in `ui/package.json` (and the core versions, see
+  `docs/UI.md`), merge that, then `git tag vX.Y.Z && git push origin vX.Y.Z`. `.github/workflows/release.yml` builds
+  both apps (each with its own core), smoke-tests the packaged apps, and publishes them with checksums. Running that
+  workflow by hand (Actions tab) builds both as workflow artifacts without publishing.
 
 ## Safety notes
 

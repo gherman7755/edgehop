@@ -1,0 +1,49 @@
+# Packaging of the desktop app (docs/UI.md, "Packaging"). The core binary is staged into `core-bin/` first
+# (CI: the Swift core on macOS, the Rust core on Windows); it ends up in `resources/core/`, where the app looks for it.
+appId: dev.edgehop.app
+productName: EdgeHop
+copyright: Copyright © EdgeHop
+artifactName: EdgeHop-${version}-${os}-${arch}.${ext}
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+extraResources:
+  - from: core-bin
+    to: core
+  - from: resources
+    to: resources
+    filter:
+      - '*.png'
+asar: true
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  category: public.app-category.utilities
+  icon: resources/icon.png
+  minimumSystemVersion: '13.0'
+  electronLanguages: [en]
+  # Not signed with a registered developer certificate (see the release notes): an ad-hoc signature, so the
+  # binaries are valid on Apple Silicon. Accessibility and Input Monitoring are asked for again after an update.
+  identity: '-'
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  extendInfo:
+    # Finding the other computer needs the Local Network permission and the service type declared.
+    NSLocalNetworkUsageDescription: EdgeHop finds the other computer on your network to share the mouse and keyboard with it.
+    NSBonjourServices:
+      - _edgehop._tcp
+dmg:
+  title: EdgeHop ${version}
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: EdgeHop-${version}-win-${arch}-setup.${ext}

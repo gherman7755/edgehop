@@ -43,7 +43,7 @@ struct Params {
 
 /// The macOS core: every method of docs/IPC.md on top of the receiver and controller sessions.
 public final class CoreService: IPCHandler {
-    public static let version = "0.1.0"
+    public static let version = "0.2.0"
     static let minimumTokenLength = 12
 
     private let emit: IPCEmit
