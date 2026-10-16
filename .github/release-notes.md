@@ -1,4 +1,4 @@
-Pre-release of EdgeHop for **macOS** and **Windows**: share one keyboard and mouse between computers on the same network, by pushing the cursor through the edge of the screen. This version has a new desktop app (the same screens on both systems) and works between a Mac and a Windows PC.
+Pre-release of EdgeHop for **macOS** and **Windows**: share one keyboard and mouse between computers on the same network, by pushing the cursor through the edge of the screen. This version has a new desktop app (the same screens on both systems), works between a Mac and a Windows PC, and **encrypts the connection**.
 
 ## Install
 
@@ -23,7 +23,7 @@ On the computer that will be controlled choose **Be controlled** and press **Sta
 - **Windows support**: a Windows PC can control a Mac and be controlled by one, mouse, scroll and (optionally) keyboard.
 - **Keyboard sharing** on both systems with a shared key map, so layouts do not have to match, and without keys sticking when the cursor crosses with a modifier held.
 - Computers on the network are **found by name** on both systems.
-- The link is now **encrypted** (computers running 0.1.0 cannot connect to 0.2.0: update both).
+- The link is now **encrypted** (computers running 0.1.0 cannot connect to this version: update both).
 - Dragging with a button held stays on the computer it started on, and a jitter right after crossing no longer bounces you back.
 - The panic chord now works on Windows too.
 

@@ -188,7 +188,7 @@ Keys are off unless you enable them on both sides (`--keys` and `--allow-keys`).
   macOS, the cross-language wire check and the Swift/Rust conformance check, and the Rust format, clippy and tests
   on Linux and on **Windows** (where the Rust core is also built and smoke-tested).
 * Releases are the Electron app for Apple Silicon Macs (DMG) and 64-bit Windows (installer), published as
-  pre-releases (latest: `v0.2.0`). To cut one: bump `version` in `ui/package.json` (and the core versions, see
+  pre-releases (latest: `v0.3.0`). To cut one: bump `version` in `ui/package.json` (and the core versions, see
   `docs/UI.md`), merge that, then `git tag vX.Y.Z && git push origin vX.Y.Z`. `.github/workflows/release.yml` builds
   both apps (each with its own core), smoke-tests the packaged apps, and publishes them with checksums. Running that
   workflow by hand (Actions tab) builds both as workflow artifacts without publishing.
