@@ -123,6 +123,13 @@ impl CaptureHandle for WinCapture {
         set_cursor(to.0, to.1);
     }
 
+    fn cursor_position(&self) -> Option<(f64, f64)> {
+        let mut cursor = POINT { x: 0, y: 0 };
+        // SAFETY: `cursor` is a valid POINT for the call.
+        let known = unsafe { GetCursorPos(&mut cursor) } != 0;
+        known.then(|| (f64::from(cursor.x), f64::from(cursor.y)))
+    }
+
     fn stop(&self) {
         let capture = self
             .capture

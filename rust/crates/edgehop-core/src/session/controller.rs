@@ -4,12 +4,12 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use edgehop_input::{CaptureHandle, CaptureSink, Platform};
 use edgehop_link::{ClientConfig, ClientHandler, LinkClient, LinkError};
 use edgehop_proto::{ControlMessage, InputEvent, MonitorInfo};
-use edgehop_switch::{Actions, Point, Rect, SwitchController};
+use edgehop_switch::{Actions, Mode, Point, Rect, SwitchController};
 
 use super::{log, Tracked};
 use crate::backend::{BackendError, ControllerConfig, ControllerState, Events, Source, Target};
@@ -133,13 +133,17 @@ impl Actions for SessionActions {
 
     fn enter_remote(&self) {
         self.sent.store(0, Ordering::SeqCst);
+        let mut parked = String::new();
         if let Some(capture) = self.capture.get() {
             capture.enter_remote();
+            if let Some((x, y)) = capture.cursor_position() {
+                parked = format!("; local cursor now at ({}, {})", x as i64, y as i64);
+            }
         }
         log(
             &self.events,
             Source::Controller,
-            format!("-> REMOTE ({})", self.peer),
+            format!("-> REMOTE ({}){parked}", self.peer),
         );
         self.shared.set_state(
             &self.events,
@@ -180,11 +184,53 @@ struct Sink {
     client: Arc<LinkClient>,
     forward_keys: bool,
     last_position: Mutex<Option<(f64, f64)>>,
+    /// Debug logging of the motion path: where the local cursor really is while control is remote, and how long
+    /// the slowest call took (the hook has about 300 ms before Windows abandons it).
+    diagnostics: Option<Diagnostics>,
+}
+
+struct Diagnostics {
+    events: Events,
+    capture: Arc<OnceLock<Arc<dyn CaptureHandle>>>,
+    motions: AtomicUsize,
+    slowest_micros: AtomicU64,
+}
+
+impl Diagnostics {
+    fn record(&self, started: Instant, position: (f64, f64), delta: (f64, f64)) {
+        let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        self.slowest_micros.fetch_max(micros, Ordering::SeqCst);
+        let count = self.motions.fetch_add(1, Ordering::SeqCst) + 1;
+        if count <= 8 || count % 60 == 0 {
+            let cursor = self
+                .capture
+                .get()
+                .and_then(|capture| capture.cursor_position())
+                .map_or_else(
+                    || "?".to_string(),
+                    |(x, y)| format!("({}, {})", x as i64, y as i64),
+                );
+            log(
+                &self.events,
+                Source::Controller,
+                format!(
+                    "motion #{count} pos=({}, {}) delta=({}, {}) local cursor={cursor} slowest={} us",
+                    position.0 as i64,
+                    position.1 as i64,
+                    delta.0 as i64,
+                    delta.1 as i64,
+                    self.slowest_micros.swap(0, Ordering::SeqCst)
+                ),
+            );
+        }
+    }
 }
 
 impl CaptureSink for Sink {
     fn motion(&self, position: (f64, f64), delta: (f64, f64)) {
         if let Some(controller) = &self.controller {
+            let started = Instant::now();
+            let was_remote = controller.mode() == Mode::Remote;
             controller.handle_motion(
                 Point {
                     x: position.0,
@@ -195,6 +241,15 @@ impl CaptureSink for Sink {
                     y: delta.1,
                 },
             );
+            if let Some(diagnostics) = &self.diagnostics {
+                let is_remote = controller.mode() == Mode::Remote;
+                if is_remote && !was_remote {
+                    diagnostics.motions.store(0, Ordering::SeqCst); // a new crossing: log its first moves
+                }
+                if is_remote {
+                    diagnostics.record(started, position, delta);
+                }
+            }
             return;
         }
         // Mirror mode: the remote cursor follows the movement this one makes, so screens may differ in size.
@@ -461,6 +516,12 @@ fn run<P: Platform>(
         client: Arc::clone(&client),
         forward_keys: config.forward_keys,
         last_position: Mutex::new(None),
+        diagnostics: config.debug.then(|| Diagnostics {
+            events: events.clone(),
+            capture: Arc::clone(&capture_slot),
+            motions: AtomicUsize::new(0),
+            slowest_micros: AtomicU64::new(0),
+        }),
     });
     let capture = match platform.start_capture(sink) {
         Ok(capture) => capture,

@@ -28,6 +28,10 @@ pub trait CaptureHandle: Send + Sync {
     fn enter_remote(&self);
     /// Control is back: put the local cursor at `to` (global pixels) and let it move again.
     fn leave_remote(&self, to: (f64, f64));
+    /// Where the real cursor is right now, if the platform can say (diagnostics only).
+    fn cursor_position(&self) -> Option<(f64, f64)> {
+        None
+    }
     /// Stops capturing and gives the cursor back. Idempotent.
     fn stop(&self);
 }
