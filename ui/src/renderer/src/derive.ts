@@ -58,9 +58,9 @@ export function connectBlocker(settings: Settings, selectedPeer: string | null, 
 	return null;
 }
 
-/** Keyboard sharing needs the neutral key map, which only some cores have so far. */
+/** Keyboard sharing needs the neutral key map (HID usages), which the macOS and Windows cores have. */
 export function keyboardSupported(platform: string | undefined): boolean {
-	return platform === 'macos';
+	return platform === 'macos' || platform === 'windows';
 }
 
 export function formatLatency(ms: number | null): string | null {

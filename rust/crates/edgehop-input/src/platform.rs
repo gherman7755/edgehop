@@ -36,6 +36,9 @@ pub trait CaptureHandle: Send + Sync {
     fn stop(&self);
 }
 
+/// Keeps a panic-chord watch alive; dropping it stops watching.
+pub trait PanicGuard: Send {}
+
 /// Why capture could not start. The text is shown to the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformError(pub String);
@@ -66,6 +69,17 @@ pub trait Platform: Send + Sync + 'static {
         &self,
         sink: Arc<dyn CaptureSink>,
     ) -> Result<Arc<dyn CaptureHandle>, PlatformError>;
+    /// Calls `on_panic` when the panic chord (`edgehop_proto::is_panic_chord`) is typed on this computer's own
+    /// keyboard, for as long as the returned guard lives. A receiver uses it so the person at the controlled
+    /// computer can always stop being controlled. Platforms without keyboard access say so.
+    fn watch_panic(
+        &self,
+        _on_panic: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Box<dyn PanicGuard>, PlatformError> {
+        Err(PlatformError(
+            "this computer cannot watch for the panic chord".into(),
+        ))
+    }
 }
 
 /// Turns raw capture data into the `(position, delta)` pair [`CaptureSink::motion`] promises, for platforms

@@ -48,16 +48,16 @@ What exists for Windows, how it is tested, and what is still missing. The Window
 
 ## Not done yet
 
-* **Keyboard.** Key codes on the wire are macOS virtual keycodes; there is no neutral key map yet (milestone
-  M7), so `WinOutput` ignores key events and there is no keyboard capture. Windows is mouse and scroll only.
+* **Caps Lock** is not shared reliably: macOS reports it as a state change (down when it turns on, up when it
+  turns off) and Windows as a press, so a Mac controlling a PC and the other way round can end up with the LEDs
+  out of step.
+* **Layout keys.** JIS-only keys (Eisu, Kana, Yen, underscore), media keys and Pause are not in `keymap.csv` yet.
 * **Horizontal scroll sign.** Windows `WM_MOUSEHWHEEL` is positive to the right; the sign macOS puts on the wire
   has not been checked against real devices.
 * **Discovery.** The Rust core has no mDNS yet: a controller connects by address (`host`), not by computer
   name.
-* **Panic chord.** The Swift core stops a session when Ctrl+Option+Cmd+Esc is typed locally. Windows has no
-  keyboard capture yet, so the way out is the UI's stop button (or closing the UI, which stops everything).
-* **Not yet verified on real hardware:** the pinned cursor in remote mode (below). Unit tests and the loopback
-  CI run cover the logic, not the feel.
+* **Not yet verified on real hardware:** the keyboard on a real Windows keyboard (below). Unit tests and CI cover
+  the logic and the hook's installation, not the feel.
 
 ## Sessions and the pinned cursor
 
@@ -81,3 +81,27 @@ shows as a jump on real hardware, it needs a guard.
 * **No bounce:** after entering, a push back out only counts once the cursor has moved 10 px away from the
   entry edge, so a one-pixel jitter right after crossing does not send you straight back.
 * Stopping, a lost link or shutdown always return control, whatever is held.
+
+## Keyboard
+
+Key events carry the **HID usage** of the physical key (`keymap.csv`, `PROTOCOL.md`), so layouts and operating
+systems do not have to match. On Windows:
+
+* **Capture** (`keyboard.rs`): one low-level keyboard hook, shared by whoever needs keys (key forwarding on a
+  controller, the panic chord on a receiver); the first subscriber installs it, the last removes it. Keys are
+  identified by scan code plus the extended flag, not by virtual key, so the layout does not matter. Pause is
+  ignored, NumLock is recognised by its virtual-key code, and the fake Shift events Windows adds around some
+  keys are not in the table and so are ignored. The hook always runs while controlling (the panic chord has to work),
+  and keeps a key from applications only while it is being forwarded.
+* **Modifiers**: the wire's modifier byte (the macOS injector needs it) comes from `ModifierTracker`, which follows
+  the modifier key events (left and right apart).
+* **Injection**: `SendInput` with `KEYEVENTF_SCANCODE` (and `KEYEVENTF_EXTENDEDKEY`), tagged with the same
+  marker as the mouse, so the hook ignores our own keys. Windows does not accept injected input for elevated
+  windows (UIPI) unless EdgeHop is elevated too.
+* **Panic chord**: Ctrl + Alt + Win + Esc on either computer. A controller stops sharing and gives the cursor back; a
+  receiver stops listening. The chord is never forwarded.
+* **Keys held while control moves**: a key already down when the cursor crosses (Shift, say) is not forwarded, but
+  its release still reaches this computer's applications, so it cannot stay pressed. A key pressed on the other
+  computer and still down when control returns is hidden here until it is released. Same rules in Swift and Rust,
+  checked by the recorded scenarios.
+* Keys only flow if both computers announce `keymap: "hid"`.

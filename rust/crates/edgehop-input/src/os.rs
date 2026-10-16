@@ -27,7 +27,7 @@ pub trait OsInput {
     /// Scroll by `horizontal` / `vertical` in 1/120 of a wheel notch (positive vertical = up).
     fn scroll(&mut self, horizontal: i32, vertical: i32);
 
-    /// Press or release a key. `code` is a macOS virtual keycode on the wire until the neutral key map exists,
-    /// so a platform that cannot translate it may ignore the event.
+    /// Press or release a key. `code` is the USB HID usage of the physical key (`docs/keymap.csv`); a platform
+    /// translates it to its own codes and ignores keys it has no equivalent for.
     fn key(&mut self, code: u16, is_down: bool, modifiers: Modifiers);
 }

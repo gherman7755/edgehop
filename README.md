@@ -168,8 +168,9 @@ Everything is unencrypted: do it on a trusted network, with keys off.
    on 43 conformance requests); TCP link crate (13 loopback tests, interoperates with the Swift link both ways).
    Windows input layer (injection verified on a real Windows runner); edge-switching controller ported to Rust and
    proven identical to the Swift one on recorded scenarios. Session backend joining them (`SessionBackend`, tested end to end
-   over loopback with fakes) and its Windows platform adapter. Next: confirm it on two real computers, then the
-   Electron UI. Still missing in the Rust core: discovery, keyboard, encryption.
+   over loopback with fakes) and its Windows platform adapter. Next: confirm it on two real computers. Keyboard sharing
+   (neutral key map, Windows capture and injection, panic chord) is implemented; still missing in the Rust core:
+   discovery and encryption.
 7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
    Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
 8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.
