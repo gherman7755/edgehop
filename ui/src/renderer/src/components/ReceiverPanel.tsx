@@ -41,7 +41,7 @@ export function ReceiverPanel({ hop }: { hop: EdgeHop }) {
 			</Card>
 
 			<Card title="Options">
-				<Switch checked={keys && settings.allowKeys} onChange={allowKeys => actions.updateSettings({ allowKeys })} disabled={running || !keys} label="Accept keyboard input too" hint={keys ? 'Not encrypted yet: only use it on a network you trust.' : 'Not available on this computer yet.'} />
+				<Switch checked={keys && settings.allowKeys} onChange={allowKeys => actions.updateSettings({ allowKeys })} disabled={running || !keys} label="Accept keyboard input too" hint={keys ? 'Lets the other computer type on this one: only accept it from a computer you trust.' : 'Not available on this computer yet.'} />
 			</Card>
 
 			<div className="actions">

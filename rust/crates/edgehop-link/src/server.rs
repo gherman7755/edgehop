@@ -7,14 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use edgehop_proto::{
-    make_nonce, verify, ControlMessage, Frame, FrameType, HelloMessage, InputEvent, MonitorInfo,
-    DEFAULT_PORT,
+    ControlMessage, Frame, FrameType, HelloMessage, InputEvent, MonitorInfo, DEFAULT_PORT,
 };
 
 use crate::conn::{lock, FrameReader, FrameWriter};
+use crate::handshake::respond;
 
 /// Callbacks run on the connection's thread: keep them quick (injection is fine, blocking I/O is not).
 pub trait ServerHandler: Send + Sync + 'static {
@@ -182,38 +180,31 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
 
 /// `id` is released before the connection is closed on the way out: a controller that sees the refusal or the
 /// close and reconnects at once must not find the slot still taken and be dropped.
-fn serve_peer(shared: &Shared, stream: TcpStream, id: u64) {
+fn serve_peer(shared: &Shared, mut stream: TcpStream, id: u64) {
     let _ = stream.set_nodelay(true); // small input records: never wait for Nagle
     let Ok(write_half) = stream.try_clone() else {
         return;
     };
-    let writer = FrameWriter::new(write_half);
-    let mut reader = FrameReader::new(stream);
     let config = &shared.config;
 
-    let Ok(nonce) = make_nonce() else { return };
-    let mut challenge = announce(
-        HelloMessage::new(config.name.clone()),
-        config.announce_keymap,
-    );
-    challenge.nonce = Some(STANDARD.encode(nonce));
-    if writer.send(&challenge.to_frame()).is_err() {
-        return;
-    }
-
-    // The whole handshake shares one deadline, so a peer cannot stretch it by dribbling bytes.
+    // The whole handshake shares one deadline, so a peer cannot stretch it by dribbling bytes. A peer that does
+    // not know the token cannot get through it: it is simply dropped, without a word.
     let deadline = Instant::now() + config.auth_timeout;
-    let Ok(first) = reader.next_frame(Some(deadline)) else {
+    let Ok((sealer, opener, hello_bytes)) =
+        respond(&mut stream, &config.token, deadline, &shared.stop)
+    else {
+        shared.release(id);
+        let _ = stream.shutdown(Shutdown::Both);
         return;
     };
-    let Some(hello) = authenticate(&config.token, &nonce, &first) else {
-        let mut refusal = HelloMessage::new(config.name.clone());
-        refusal.accepted = Some(false);
+    let writer = FrameWriter::new(write_half, sealer);
+    let mut reader = FrameReader::new(stream, opener);
+    let Some(hello) = HelloMessage::from_frame(&Frame::new(FrameType::Hello, hello_bytes)) else {
         shared.release(id);
-        let _ = writer.send(&refusal.to_frame());
         writer.shutdown();
         return;
     };
+
     let mut accepted = announce(
         HelloMessage::new(config.name.clone()),
         config.announce_keymap,
@@ -260,11 +251,4 @@ fn announce(hello: HelloMessage, keymap: bool) -> HelloMessage {
     } else {
         hello
     }
-}
-
-/// The controller's hello if it carries a valid proof for `nonce`.
-fn authenticate(token: &str, nonce: &[u8], first: &Frame) -> Option<HelloMessage> {
-    let hello = HelloMessage::from_frame(first)?;
-    let proof = STANDARD.decode(hello.proof.as_deref()?).ok()?;
-    verify(token, nonce, &proof).then_some(hello)
 }

@@ -2,8 +2,8 @@
 //! (`scripts/golden-vectors.sh gen`). Every vector must encode and decode identically here.
 
 use edgehop_proto::{
-    encode_frame, ping_payload, proof, verify, ControlMessage, Frame, FrameDecoder, FrameType,
-    HelloMessage, InputEvent, Modifiers, MonitorInfo, MouseButton,
+    encode_frame, ping_payload, ControlMessage, Frame, FrameDecoder, FrameType, HelloMessage,
+    InputEvent, Modifiers, MonitorInfo, MouseButton,
 };
 use serde_json::Value;
 
@@ -117,17 +117,6 @@ fn frames_match_swift_byte_for_byte() {
     }
 }
 
-#[test]
-fn handshake_proof_matches_swift() {
-    let golden = golden();
-    let entry = &golden["auth"][0];
-    let token = entry["token"].as_str().unwrap();
-    let nonce = unhex(entry["nonceHex"].as_str().unwrap());
-    let expected = unhex(entry["proofHex"].as_str().unwrap());
-    assert_eq!(proof(token, &nonce).to_vec(), expected);
-    assert!(verify(token, &nonce, &expected));
-}
-
 fn hello_from(entry: &Value) -> HelloMessage {
     let frame = Frame::new(
         FrameType::Hello,
@@ -147,19 +136,13 @@ fn hello_messages_written_by_swift_parse_here() {
         .collect();
     assert_eq!(hellos.len(), 4);
 
-    // Challenge: the server sends only a nonce.
+    // The controller's hello: name, monitors and the key map.
     assert_eq!(hellos[0].name, "Mac");
-    assert_eq!(
-        hellos[0].nonce.as_deref(),
-        Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
-    );
-    assert!(
-        hellos[0].proof.is_none() && hellos[0].accepted.is_none() && hellos[0].monitors.is_none()
-    );
+    assert!(hellos[0].speaks_hid_keys());
+    assert!(hellos[0].accepted.is_none() && hellos[0].monitors.is_none());
 
-    // Client answer: proof and monitors.
     assert_eq!(hellos[1].name, "PC");
-    assert!(hellos[1].proof.is_some());
+    assert!(hellos[1].speaks_hid_keys());
     let monitors = hellos[1].monitors.as_ref().unwrap();
     assert_eq!(
         monitors[1],
@@ -175,23 +158,6 @@ fn hello_messages_written_by_swift_parse_here() {
     // Accept / reject.
     assert_eq!(hellos[2].accepted, Some(true));
     assert_eq!(hellos[3].accepted, Some(false));
-}
-
-#[test]
-fn the_swift_proof_inside_a_hello_verifies_here() {
-    let golden = golden();
-    let hello = hello_from(&golden["hello"][1]);
-    let proof_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        hello.proof.unwrap(),
-    )
-    .unwrap();
-    let auth = &golden["auth"][0];
-    assert!(verify(
-        auth["token"].as_str().unwrap(),
-        &unhex(auth["nonceHex"].as_str().unwrap()),
-        &proof_bytes
-    ));
 }
 
 #[test]
@@ -213,4 +179,74 @@ fn control_and_ping_match_swift() {
         hex(&ping_payload(now)),
         ping["payloadHex"].as_str().unwrap()
     );
+}
+
+fn fixed_key(entry: &Value, name: &str) -> Vec<u8> {
+    unhex(entry[name].as_str().unwrap())
+}
+
+/// Replays a handshake with the fixed keys of a vector: every message must be byte for byte what the vector says
+/// (so Swift and Rust compute the same keys, hashes and ciphertexts), and the transport messages too.
+fn replay_noise(entry: &Value) {
+    use edgehop_proto::{psk_from_token, Handshake, Role};
+    let psk = psk_from_token(entry["token"].as_str().unwrap());
+    let mut initiator = Handshake::with_fixed_keys_for_testing(
+        Role::Initiator,
+        &psk,
+        &fixed_key(entry, "initiatorStaticHex"),
+        &fixed_key(entry, "initiatorEphemeralHex"),
+    )
+    .unwrap();
+    let mut responder = Handshake::with_fixed_keys_for_testing(
+        Role::Responder,
+        &psk,
+        &fixed_key(entry, "responderStaticHex"),
+        &fixed_key(entry, "responderEphemeralHex"),
+    )
+    .unwrap();
+    let expected: Vec<Vec<u8>> = entry["messagesHex"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| unhex(m.as_str().unwrap()))
+        .collect();
+    let payload = unhex(entry["payloadHex"].as_str().unwrap());
+
+    let m1 = initiator.write(&[]).unwrap();
+    assert_eq!(m1, expected[0], "message 1");
+    responder.read(&expected[0]).unwrap();
+    let m2 = responder.write(&[]).unwrap();
+    assert_eq!(m2, expected[1], "message 2");
+    initiator.read(&expected[1]).unwrap();
+    let m3 = initiator.write(&payload).unwrap();
+    assert_eq!(m3, expected[2], "message 3");
+    assert_eq!(responder.read(&expected[2]).unwrap(), payload);
+
+    let (mut initiator_seal, mut initiator_open) = initiator.into_transport().unwrap();
+    let (mut responder_seal, mut responder_open) = responder.into_transport().unwrap();
+    for message in entry["transport"].as_array().unwrap() {
+        let plaintext = unhex(message["plaintextHex"].as_str().unwrap());
+        let wire = unhex(message["wireHex"].as_str().unwrap());
+        let (seal, open) = if message["from"] == "initiator" {
+            (&mut initiator_seal, &mut responder_open)
+        } else {
+            (&mut responder_seal, &mut initiator_open)
+        };
+        assert_eq!(
+            seal.seal(&plaintext).unwrap(),
+            wire,
+            "sealing {plaintext:?}"
+        );
+        assert_eq!(open.open(&wire).unwrap(), plaintext, "opening {wire:?}");
+    }
+}
+
+#[test]
+fn the_noise_handshake_and_transport_written_by_swift_match_snow() {
+    let golden = golden();
+    let entries = golden["noise"].as_array().unwrap();
+    assert!(!entries.is_empty());
+    for entry in entries {
+        replay_noise(entry);
+    }
 }

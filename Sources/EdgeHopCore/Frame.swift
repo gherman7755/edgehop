@@ -27,7 +27,7 @@ public enum FrameError: Error, Equatable {
     case payloadTooLarge(Int)
 }
 
-/// Logical frame: 8-byte header + payload. Carried inside the (future) encrypted transport.
+/// Logical frame: 8-byte header + payload. Carried inside the encrypted transport (`Noise.swift`).
 ///
 ///     0..2  magic   "EH"
 ///     2     type    FrameType

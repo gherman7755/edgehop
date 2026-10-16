@@ -54,7 +54,7 @@ export function ControllerPanel({ hop }: { hop: EdgeHop }) {
 
 			<Card title="Options">
 				<Switch checked={settings.switching} onChange={switching => actions.updateSettings({ switching })} disabled={running} label="Move the cursor across the screen edge" hint="Off: mirror the mouse on both computers at once." />
-				<Switch checked={keys && settings.forwardKeys} onChange={forwardKeys => actions.updateSettings({ forwardKeys })} disabled={running || !keys} label="Also share the keyboard" hint={keys ? 'Not encrypted yet: only use it on a network you trust.' : 'Not available on this computer yet.'} />
+				<Switch checked={keys && settings.forwardKeys} onChange={forwardKeys => actions.updateSettings({ forwardKeys })} disabled={running || !keys} label="Also share the keyboard" hint={keys ? 'Everything you type goes to the other computer: only share it with a computer you trust.' : 'Not available on this computer yet.'} />
 			</Card>
 
 			<div className="actions">

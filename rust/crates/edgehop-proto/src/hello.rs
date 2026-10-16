@@ -13,17 +13,12 @@ pub struct MonitorInfo {
     pub height: f64,
 }
 
-/// JSON payload of `hello` frames, used for the whole handshake:
-/// server to client `{nonce}`; client to server `{proof, name, monitors}`; server to client `{accepted}`.
-/// `nonce` and `proof` are base64.
+/// JSON payload of the hellos: the controller's, carried as the payload of the last handshake message, and the
+/// receiver's answer, the first encrypted frame (`accepted`, with its name and monitors).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HelloMessage {
     pub version: i32,
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proof: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,8 +34,6 @@ impl HelloMessage {
         Self {
             version: PROTOCOL_VERSION,
             name: name.into(),
-            nonce: None,
-            proof: None,
             accepted: None,
             monitors: None,
             keymap: None,
@@ -82,7 +75,7 @@ mod tests {
     #[test]
     fn round_trips_through_a_frame() {
         let mut hello = HelloMessage::new("PC");
-        hello.proof = Some("abc".into());
+        hello.accepted = Some(true);
         hello.monitors = Some(vec![MonitorInfo {
             id: "d1".into(),
             x: 0.0,
@@ -96,7 +89,7 @@ mod tests {
     #[test]
     fn omits_absent_fields() {
         let json = String::from_utf8(HelloMessage::new("PC").to_frame().payload).unwrap();
-        assert_eq!(json, r#"{"version":1,"name":"PC"}"#);
+        assert_eq!(json, r#"{"version":2,"name":"PC"}"#);
     }
 
     #[test]

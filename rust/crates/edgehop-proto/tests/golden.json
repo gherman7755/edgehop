@@ -1,11 +1,4 @@
 {
-  "auth" : [
-    {
-      "nonceHex" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-      "proofHex" : "94160286413bd3e4d94f020af151841c5505c935a4ff8f2f043225fcf754fdf5",
-      "token" : "correct-horse-battery"
-    }
-  ],
   "control" : [
     {
       "json" : "{\"t\":\"release_all\"}"
@@ -92,16 +85,48 @@
   ],
   "hello" : [
     {
-      "json" : "{\"name\":\"Mac\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"version\":1}"
+      "json" : "{\"keymap\":\"hid\",\"name\":\"Mac\",\"version\":2}"
     },
     {
-      "json" : "{\"monitors\":[{\"height\":982,\"id\":\"d1\",\"width\":1512,\"x\":0,\"y\":0},{\"height\":1080,\"id\":\"d2\",\"width\":1920,\"x\":-223,\"y\":-1080}],\"name\":\"PC\",\"proof\":\"lBYChkE70+TZTwIK8VGEHFUFyTWk/48vBDIl/PdU/fU=\",\"version\":1}"
+      "json" : "{\"keymap\":\"hid\",\"monitors\":[{\"height\":982,\"id\":\"d1\",\"width\":1512,\"x\":0,\"y\":0},{\"height\":1080,\"id\":\"d2\",\"width\":1920,\"x\":-223,\"y\":-1080}],\"name\":\"PC\",\"version\":2}"
     },
     {
-      "json" : "{\"accepted\":true,\"monitors\":[{\"height\":982,\"id\":\"d1\",\"width\":1512,\"x\":0,\"y\":0},{\"height\":1080,\"id\":\"d2\",\"width\":1920,\"x\":-223,\"y\":-1080}],\"name\":\"Mac\",\"version\":1}"
+      "json" : "{\"accepted\":true,\"monitors\":[{\"height\":982,\"id\":\"d1\",\"width\":1512,\"x\":0,\"y\":0},{\"height\":1080,\"id\":\"d2\",\"width\":1920,\"x\":-223,\"y\":-1080}],\"name\":\"Mac\",\"version\":2}"
     },
     {
-      "json" : "{\"accepted\":false,\"name\":\"Mac\",\"version\":1}"
+      "json" : "{\"accepted\":false,\"name\":\"Mac\",\"version\":2}"
+    }
+  ],
+  "noise" : [
+    {
+      "initiatorEphemeralHex" : "2222222222222222222222222222222222222222222222222222222222222222",
+      "initiatorStaticHex" : "1111111111111111111111111111111111111111111111111111111111111111",
+      "messagesHex" : [
+        "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f200c782a03ff2918fbc44dc92e7efd1019",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b8aeb44b00a2b65060ab0409f3549a5693f7c5c9a4bbacdf646d805f3ef2ea24273f0a9b37a2127a666541e324e0f9b93d13154a42d027e12d0b51201da43ddff",
+        "6e0d54d2fab89ac2990484b24a912beadd94d2a4c455e10dc06574fad8f9322974c72215eeb03f077969e798cf2c13ebb033396302056df5daad3dffc0cf00e950506dac36bf6530cd0312c0b95fd0b074e75084d252c92aa66e57a21ba92eeb7e7955ef83630ee7"
+      ],
+      "payloadHex" : "7b2276657273696f6e223a322c226e616d65223a225043222c226b65796d6170223a22686964227d",
+      "responderEphemeralHex" : "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderStaticHex" : "3333333333333333333333333333333333333333333333333333333333333333",
+      "token" : "correct-horse-battery",
+      "transport" : [
+        {
+          "from" : "initiator",
+          "plaintextHex" : "6669727374206672616d65206279746573",
+          "wireHex" : "002147b73e95d5d68c31af718745214dbe5883a736b01b101a086c7f6bedb2d3084652"
+        },
+        {
+          "from" : "responder",
+          "plaintextHex" : "616e73776572",
+          "wireHex" : "0016daa8a7f004c674a0921d5041c019fb296812c8a4c51c"
+        },
+        {
+          "from" : "initiator",
+          "plaintextHex" : "7365636f6e64",
+          "wireHex" : "00166212eefc992e407f37dc3aa65d15ad5fbcaf4e3cab02"
+        }
+      ]
     }
   ],
   "ping" : [

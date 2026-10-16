@@ -12,7 +12,7 @@ import Foundation
 //
 // Token: pass it through the EDGEHOP_TOKEN environment variable (preferred; --token shows up in `ps`).
 // Without --switch, `connect` mirrors the mouse (both cursors move). Keys are OFF unless you opt in on BOTH
-// sides (--keys / --allow-keys): the link is not encrypted yet. Panic chord: Ctrl + Option + Cmd + Esc.
+// sides (--keys / --allow-keys). Panic chord: Ctrl + Option + Cmd + Esc.
 
 setvbuf(stdout, nil, _IOLBF, 0) // line-buffered even when redirected: logs show up immediately
 

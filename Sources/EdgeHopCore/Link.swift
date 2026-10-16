@@ -1,17 +1,15 @@
-import CryptoKit
 import Foundation
 import Network
 
-// M4: plaintext TCP link between two Macs. Authentication only (shared token, challenge-response):
-// input events are NOT encrypted. Use on a trusted LAN until M6 (Noise) replaces this transport.
+// The TCP link between two computers. Every connection starts with an encrypted handshake (`Noise.swift`,
+// Noise_XXpsk3 with the shared token as the pre-shared key): only a computer that knows the token gets through,
+// and everything after it is encrypted and authenticated.
 
-/// JSON payload of `hello` frames, used for the whole handshake:
-/// server -> client `{nonce}`; client -> server `{proof, name, monitors}`; server -> client `{accepted}`.
+/// JSON payload of the hellos: the controller's, carried as the payload of the last handshake message, and the
+/// receiver's answer, the first encrypted frame (`accepted`, with its name and monitors).
 public struct HelloMessage: Codable, Equatable, Sendable {
     public var version: Int
     public var name: String
-    public var nonce: String?
-    public var proof: String?
     public var accepted: Bool?
     public var monitors: [MonitorInfo]?
     /// `"hid"` if the sender sends and understands HID key codes (`Keymap`). Absent: macOS keycodes, so no keys.
@@ -20,14 +18,9 @@ public struct HelloMessage: Codable, Equatable, Sendable {
     /// True if the sender announced HID key codes.
     public var speaksHIDKeys: Bool { keymap == Keymap.name }
 
-    public init(
-        version: Int = 1, name: String, nonce: String? = nil, proof: String? = nil,
-        accepted: Bool? = nil, monitors: [MonitorInfo]? = nil, keymap: String? = nil
-    ) {
+    public init(version: Int = 2, name: String, accepted: Bool? = nil, monitors: [MonitorInfo]? = nil, keymap: String? = nil) {
         self.version = version
         self.name = name
-        self.nonce = nonce
-        self.proof = proof
         self.accepted = accepted
         self.monitors = monitors
         self.keymap = keymap
@@ -47,26 +40,6 @@ public enum LinkError: Error, Equatable {
     case rejected
     case protocolError(String)
     case connectionFailed(String)
-}
-
-/// Challenge-response so the shared token itself never crosses the network.
-public enum LinkAuth {
-    private static func key(_ token: String) -> SymmetricKey { SymmetricKey(data: Data(token.utf8)) }
-    private static func message(_ nonce: Data) -> Data { Data("edgehop-link-v1|".utf8) + nonce }
-
-    public static func makeNonce() -> Data {
-        var generator = SystemRandomNumberGenerator()
-        return Data((0..<32).map { _ in UInt8.random(in: 0...255, using: &generator) })
-    }
-
-    public static func proof(token: String, nonce: Data) -> Data {
-        Data(HMAC<SHA256>.authenticationCode(for: message(nonce), using: key(token)))
-    }
-
-    /// Constant-time comparison (CryptoKit).
-    public static func verify(token: String, nonce: Data, proof: Data) -> Bool {
-        HMAC<SHA256>.isValidAuthenticationCode(proof, authenticating: message(nonce), using: key(token))
-    }
 }
 
 /// The panic chord stops forwarding on either machine: Ctrl + Option + Cmd + Esc.
@@ -89,22 +62,37 @@ enum LinkTransport {
     }
 }
 
-/// Frames over one `NWConnection`. All callbacks run on `queue`.
+/// Frames over one `NWConnection`, encrypted: the Noise handshake runs first, then every frame travels inside
+/// Noise transport messages. All callbacks run on `queue`.
 public final class LinkConnection {
     private let nw: NWConnection
     private let queue: DispatchQueue
     private var decoder = FrameDecoder()
     private var closed = false
 
+    private var handshake: NoiseHandshake?
+    private var handshakeReader = NoiseMessageReader()
+    private var transport: NoiseTransport?
+    private let sendLock = NSLock()
+    private var receivedAnything = false
+
     public var onReady: (() -> Void)?
     /// NWConnection is retrying (no route, refused, unreachable...). The error says why.
     public var onWaiting: ((NWError) -> Void)?
+    /// The handshake succeeded: the argument is the payload of the last handshake message, which for the receiver is
+    /// the controller's hello (authenticated: only a computer that knows the token can have sent it).
+    public var onSecured: ((Data) -> Void)?
+    /// What the controller says about itself in its handshake message (the controller's side only).
+    public var handshakePayload: (() -> Data)?
     public var onFrame: ((Frame) -> Void)?
     public var onClosed: ((Error?) -> Void)?
+    /// True once the handshake has succeeded.
+    public var isSecured: Bool { transport != nil }
 
-    public init(_ nw: NWConnection, queue: DispatchQueue) {
+    public init(_ nw: NWConnection, queue: DispatchQueue, role: NoiseHandshake.Role, token: String) {
         self.nw = nw
         self.queue = queue
+        self.handshake = NoiseHandshake(role: role, token: token)
     }
 
     public func start() {
@@ -113,6 +101,7 @@ public final class LinkConnection {
             switch state {
             case .ready:
                 self.onReady?()
+                self.beginHandshake()
                 self.receiveLoop()
             case let .waiting(error): self.onWaiting?(error)
             case let .failed(error): self.finish(error)
@@ -123,8 +112,14 @@ public final class LinkConnection {
         nw.start(queue: queue)
     }
 
+    /// Frames can only be sent once the handshake is done.
     public func send(_ frame: Frame, then: (() -> Void)? = nil) {
-        nw.send(content: FrameCodec.encode(frame), completion: .contentProcessed { [weak self] error in
+        sendLock.lock()
+        defer { sendLock.unlock() }
+        guard var transport else { then?(); return }
+        guard let sealed = try? transport.seal(FrameCodec.encode(frame)) else { finish(NoiseError.crypto); nw.cancel(); return }
+        self.transport = transport
+        nw.send(content: sealed, completion: .contentProcessed { [weak self] error in
             if let error { self?.finish(error) }
             then?()
         })
@@ -132,15 +127,27 @@ public final class LinkConnection {
 
     public func cancel() { nw.cancel() }
 
+    private func beginHandshake() {
+        guard let handshake, handshake.role == .initiator else { return }
+        guard let first = try? handshake.write() else { fail(NoiseError.crypto); return }
+        nw.send(content: Noise.withLength(first), completion: .contentProcessed { [weak self] error in
+            if let error { self?.finish(error) }
+        })
+    }
+
+    private func fail(_ error: Error) {
+        finish(error)
+        nw.cancel()
+    }
+
     private func receiveLoop() {
         nw.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self, !self.closed else { return }
             if let data, !data.isEmpty {
                 do {
-                    for frame in try self.decoder.feed(data) { self.onFrame?(frame) }
+                    try self.handle(data)
                 } catch {
-                    self.finish(error) // protocol violation: drop the connection
-                    self.nw.cancel()
+                    self.fail(error) // protocol violation or a message that does not verify: drop the connection
                     return
                 }
             }
@@ -148,6 +155,58 @@ public final class LinkConnection {
             if isComplete { self.finish(nil); self.nw.cancel(); return }
             self.receiveLoop()
         }
+    }
+
+    private func handle(_ data: Data) throws {
+        if var transport {
+            let plaintext = try transport.open(data)
+            self.transport = transport
+            for frame in try decoder.feed(plaintext) { onFrame?(frame) }
+            return
+        }
+        guard let handshake else { return }
+        // A computer from before the encrypted link answers with a hello frame ("EH" magic) where a handshake
+        // message length was expected.
+        if !receivedAnything, handshake.role == .initiator, Noise.looksLikeOlderEdgeHop(data) {
+            throw LinkError.protocolError("the other computer runs an older, unencrypted EdgeHop: update it there")
+        }
+        receivedAnything = true
+        handshakeReader.push(data)
+        while let message = handshakeReader.nextMessage(), transport == nil {
+            let payload = try handshake.read(message)
+            switch (handshake.role, handshake.isFinished) {
+            case (.responder, false):
+                // message 1 read: answer with message 2
+                nw.send(content: Noise.withLength(try handshake.write()), completion: .contentProcessed { [weak self] error in
+                    if let error { self?.finish(error) }
+                })
+            case (.initiator, false):
+                // message 2 read: answer with message 3, carrying the controller's hello
+                let third = try handshake.write(handshakePayload?() ?? Data())
+                nw.send(content: Noise.withLength(third), completion: .contentProcessed { [weak self] error in
+                    if let error { self?.finish(error) }
+                })
+                try secure(handshake)
+                onSecured?(Data())
+            case (.responder, true):
+                try secure(handshake)
+                onSecured?(payload)
+            case (.initiator, true):
+                break
+            }
+        }
+        if transport != nil {
+            // Bytes that arrived behind the last handshake message already belong to the encrypted stream.
+            let rest = handshakeReader.drain()
+            if !rest.isEmpty { try handle(rest) }
+        }
+    }
+
+    private func secure(_ handshake: NoiseHandshake) throws {
+        sendLock.lock()
+        transport = try handshake.transport()
+        sendLock.unlock()
+        self.handshake = nil
     }
 
     private func finish(_ error: Error?) {
@@ -220,29 +279,20 @@ public final class LinkServer {
 
     private func accept(_ nw: NWConnection) {
         guard active == nil else { nw.cancel(); return } // one peer at a time
-        let conn = LinkConnection(nw, queue: queue)
+        let conn = LinkConnection(nw, queue: queue, role: .responder, token: token)
         active = conn
-        let nonce = LinkAuth.makeNonce()
         var authenticated = false
 
-        conn.onReady = { [weak conn, name] in
-            conn?.send(encode(HelloMessage(name: name, nonce: nonce.base64EncodedString(), keymap: Keymap.name)))
+        // Only a computer that knows the token gets this far: its hello is the payload of the last handshake message.
+        conn.onSecured = { [weak self, weak conn] payload in
+            guard let self, let conn else { return }
+            guard let hello = try? JSONDecoder().decode(HelloMessage.self, from: payload) else { conn.cancel(); return }
+            authenticated = true
+            conn.send(encode(HelloMessage(name: self.name, accepted: true, monitors: LocalDisplays.list(), keymap: Keymap.name)))
+            self.onPeerConnected?(hello)
         }
         conn.onFrame = { [weak self, weak conn] frame in
             guard let self, let conn else { return }
-            if !authenticated {
-                guard let hello = decodeHello(frame),
-                      let proofText = hello.proof, let proof = Data(base64Encoded: proofText),
-                      LinkAuth.verify(token: self.token, nonce: nonce, proof: proof)
-                else {
-                    conn.send(encode(HelloMessage(name: self.name, accepted: false))) { conn.cancel() }
-                    return
-                }
-                authenticated = true
-                conn.send(encode(HelloMessage(name: self.name, accepted: true, monitors: LocalDisplays.list(), keymap: Keymap.name)))
-                self.onPeerConnected?(hello)
-                return
-            }
             switch frame.type {
             case .input:
                 if let event = try? InputEvent.decode(frame.payload) { self.onInput?(event) }
@@ -292,12 +342,12 @@ public final class LinkClient {
     /// Same, for any endpoint (a Bonjour service found by `PeerBrowser`, or host + port).
     public func connect(to endpoint: NWEndpoint, label: String, timeout: TimeInterval = 8) throws -> HelloMessage {
         let nw = NWConnection(to: endpoint, using: LinkTransport.parameters())
-        let conn = LinkConnection(nw, queue: queue)
+        let conn = LinkConnection(nw, queue: queue, role: .initiator, token: token)
         connection = conn
 
         let done = DispatchSemaphore(value: 0)
         var result: Result<HelloMessage, LinkError>?
-        var phase = 0 // 0 waiting for challenge, 1 waiting for accept, 2 connected
+        var phase = 0 // 0 handshaking, 1 waiting for the receiver's answer, 2 connected
         var tcpConnected = false
         var lastWaiting: String?
         conn.onReady = { tcpConnected = true }
@@ -306,31 +356,35 @@ public final class LinkClient {
             if result == nil { result = r; done.signal() }
         }
 
-        conn.onFrame = { [weak self, weak conn] frame in
-            guard let self, let conn else { return }
-            switch phase {
-            case 0:
-                guard let hello = decodeHello(frame), let nonceText = hello.nonce,
-                      let nonce = Data(base64Encoded: nonceText)
-                else { return finish(.failure(.protocolError("expected challenge"))) }
-                let proof = LinkAuth.proof(token: self.token, nonce: nonce).base64EncodedString()
-                phase = 1
-                conn.send(encode(HelloMessage(name: self.name, proof: proof, monitors: LocalDisplays.list(), keymap: Keymap.name)))
-            case 1:
-                guard let hello = decodeHello(frame), let accepted = hello.accepted
-                else { return finish(.failure(.protocolError("expected accept"))) }
-                if accepted { phase = 2; finish(.success(hello)) } else { finish(.failure(.rejected)) }
-            default:
-                if frame.type == .pong, frame.payload.count == 8 {
-                    let sent = frame.payload.reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
-                    self.onPong?(Double(nowMillis() &- sent))
-                }
+        // The controller's hello travels inside the last handshake message.
+        conn.handshakePayload = { [name] in
+            (try? JSONEncoder().encode(HelloMessage(name: name, monitors: LocalDisplays.list(), keymap: Keymap.name))) ?? Data()
+        }
+        conn.onSecured = { _ in phase = 1 }
+        conn.onFrame = { [weak self] frame in
+            guard let self else { return }
+            if phase == 1 {
+                // The first encrypted frame: only a receiver that knows the token can have sent it.
+                guard let hello = decodeHello(frame), hello.accepted == true else { return finish(.failure(.protocolError("expected accept"))) }
+                phase = 2
+                return finish(.success(hello))
+            }
+            if frame.type == .pong, frame.payload.count == 8 {
+                let sent = frame.payload.reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+                self.onPong?(Double(nowMillis() &- sent))
             }
         }
         conn.onClosed = { [weak self] error in
-            if phase < 2 {
-                finish(.failure(.connectionFailed(error?.localizedDescription ?? "closed")))
-            } else {
+            switch phase {
+            case 0:
+                if let linkError = error as? LinkError { finish(.failure(linkError)) }
+                else if error is NoiseError { finish(.failure(.protocolError("the encrypted handshake failed"))) }
+                else { finish(.failure(.connectionFailed(error?.localizedDescription ?? "closed"))) }
+            case 1:
+                // Closed right after our last handshake message: the receiver could not verify it, which means the
+                // token differs.
+                finish(.failure(.rejected))
+            default:
                 self?.onClosed?(error)
             }
         }

@@ -75,7 +75,6 @@ let sampleFrames: [Frame] = [
 ]
 
 let authToken = "correct-horse-battery"
-let authNonce = Data((0..<32).map { UInt8($0) })
 
 func jsonString(_ value: some Encodable) -> String {
     let encoder = JSONEncoder()
@@ -85,11 +84,72 @@ func jsonString(_ value: some Encodable) -> String {
 
 let sampleMonitors = [MonitorInfo(id: "d1", x: 0, y: 0, width: 1512, height: 982), MonitorInfo(id: "d2", x: -223, y: -1080, width: 1920, height: 1080)]
 let sampleHellos: [HelloMessage] = [
-    HelloMessage(name: "Mac", nonce: authNonce.base64EncodedString()),
-    HelloMessage(name: "PC", proof: LinkAuth.proof(token: authToken, nonce: authNonce).base64EncodedString(), monitors: sampleMonitors),
+    HelloMessage(name: "Mac", keymap: Keymap.name),
+    HelloMessage(name: "PC", monitors: sampleMonitors, keymap: Keymap.name),
     HelloMessage(name: "Mac", accepted: true, monitors: sampleMonitors),
     HelloMessage(name: "Mac", accepted: false),
 ]
+
+// MARK: Noise (the same fixed keys and messages as the Rust emitter: never use these keys anywhere else)
+
+func fixedKey(_ byte: UInt8) -> Data { Data(repeating: byte, count: 32) }
+let noisePayload = Data(#"{"version":2,"name":"PC","keymap":"hid"}"#.utf8)
+let noiseTransportMessages: [(from: String, plaintext: Data)] = [
+    ("initiator", Data("first frame bytes".utf8)), ("responder", Data("answer".utf8)), ("initiator", Data("second".utf8)),
+]
+
+func noiseVector() -> [String: Any] {
+    let psk = Noise.psk(fromToken: authToken)
+    let initiator = try! NoiseHandshake(role: .initiator, psk: psk, staticKey: fixedKey(0x11), ephemeralKey: fixedKey(0x22))
+    let responder = try! NoiseHandshake(role: .responder, psk: psk, staticKey: fixedKey(0x33), ephemeralKey: fixedKey(0x44))
+    let m1 = try! initiator.write()
+    _ = try! responder.read(m1)
+    let m2 = try! responder.write()
+    _ = try! initiator.read(m2)
+    let m3 = try! initiator.write(noisePayload)
+    precondition(try! responder.read(m3) == noisePayload)
+    var initiatorTransport = try! initiator.transport()
+    var responderTransport = try! responder.transport()
+    let transport: [[String: Any]] = noiseTransportMessages.map { message in
+        let wire = message.from == "initiator" ? try! initiatorTransport.seal(message.plaintext) : try! responderTransport.seal(message.plaintext)
+        return ["from": message.from, "plaintextHex": hex(message.plaintext), "wireHex": hex(wire)]
+    }
+    return [
+        "token": authToken, "initiatorStaticHex": hex(fixedKey(0x11)), "initiatorEphemeralHex": hex(fixedKey(0x22)),
+        "responderStaticHex": hex(fixedKey(0x33)), "responderEphemeralHex": hex(fixedKey(0x44)), "payloadHex": hex(noisePayload),
+        "messagesHex": [hex(m1), hex(m2), hex(m3)], "transport": transport,
+    ]
+}
+
+/// Replays a vector (written by Rust, or by Swift itself): every message must be byte for byte what it says.
+func replayNoise(_ entry: [String: Any], check: (Bool, @autoclosure () -> String) -> Void) {
+    guard let token = entry["token"] as? String,
+          let initiatorStatic = unhex(entry["initiatorStaticHex"] as? String ?? ""), let initiatorEphemeral = unhex(entry["initiatorEphemeralHex"] as? String ?? ""),
+          let responderStatic = unhex(entry["responderStaticHex"] as? String ?? ""), let responderEphemeral = unhex(entry["responderEphemeralHex"] as? String ?? ""),
+          let payload = unhex(entry["payloadHex"] as? String ?? ""), let messages = (entry["messagesHex"] as? [String])?.compactMap(unhex), messages.count == 3,
+          let transport = entry["transport"] as? [[String: Any]]
+    else { fail("bad noise entry") }
+    let psk = Noise.psk(fromToken: token)
+    let initiator = try! NoiseHandshake(role: .initiator, psk: psk, staticKey: initiatorStatic, ephemeralKey: initiatorEphemeral)
+    let responder = try! NoiseHandshake(role: .responder, psk: psk, staticKey: responderStatic, ephemeralKey: responderEphemeral)
+    check((try? initiator.write()) == messages[0], "noise message 1 differs")
+    check((try? responder.read(messages[0])) != nil, "Swift cannot read noise message 1")
+    check((try? responder.write()) == messages[1], "noise message 2 differs")
+    check((try? initiator.read(messages[1])) != nil, "Swift cannot read noise message 2")
+    check((try? initiator.write(payload)) == messages[2], "noise message 3 differs")
+    check((try? responder.read(messages[2])) == payload, "Swift cannot read noise message 3")
+    guard var initiatorTransport = try? initiator.transport(), var responderTransport = try? responder.transport() else { fail("noise handshake did not finish") }
+    for message in transport {
+        guard let plaintext = unhex(message["plaintextHex"] as? String ?? ""), let wire = unhex(message["wireHex"] as? String ?? "") else { fail("bad noise transport entry") }
+        if message["from"] as? String == "initiator" {
+            check((try? initiatorTransport.seal(plaintext)) == wire, "noise transport message from the initiator differs")
+            check((try? responderTransport.open(wire)) == plaintext, "Swift cannot open the initiator's transport message")
+        } else {
+            check((try? responderTransport.seal(plaintext)) == wire, "noise transport message from the responder differs")
+            check((try? initiatorTransport.open(wire)) == plaintext, "Swift cannot open the responder's transport message")
+        }
+    }
+}
 
 // MARK: gen
 
@@ -98,13 +158,12 @@ func generate() {
     let frames = sampleFrames.map {
         ["type": Int($0.type.rawValue), "flags": Int($0.flags), "payloadHex": hex($0.payload), "hex": hex(FrameCodec.encode($0))] as [String: Any]
     }
-    let auth: [[String: Any]] = [["token": authToken, "nonceHex": hex(authNonce), "proofHex": hex(LinkAuth.proof(token: authToken, nonce: authNonce))]]
     let hellos = sampleHellos.map { ["json": jsonString($0)] }
     let control: [[String: Any]] = [["json": #"{"t":"release_all"}"#]]
     // Same expression as LinkClient.sendPing().
     var millis = UInt64(1_234_567_890_123).bigEndian
     let ping: [[String: Any]] = [["nowMillis": 1_234_567_890_123, "payloadHex": hex(Data(bytes: &millis, count: 8))]]
-    let root: [String: Any] = ["events": events, "frames": frames, "auth": auth, "hello": hellos, "control": control, "ping": ping]
+    let root: [String: Any] = ["events": events, "frames": frames, "noise": [noiseVector()], "hello": hellos, "control": control, "ping": ping]
     let data = try! JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     print(String(data: data, encoding: .utf8)!)
 }
@@ -136,12 +195,7 @@ func verify(path: String) {
         check(frames?.count == 1 && frames?[0].payload == payload && Int(frames?[0].type.rawValue ?? 0) == entry["type"] as? Int
             && Int(frames?[0].flags ?? 0) == entry["flags"] as? Int, "Swift rejects or misreads Rust frame \(hex(bytes))")
     }
-    for entry in root["auth"] as? [[String: Any]] ?? [] {
-        guard let token = entry["token"] as? String, let nonce = unhex(entry["nonceHex"] as? String ?? ""), let proof = unhex(entry["proofHex"] as? String ?? "")
-        else { fail("bad auth entry") }
-        check(LinkAuth.verify(token: token, nonce: nonce, proof: proof), "Swift rejects the Rust proof")
-        check(LinkAuth.proof(token: token, nonce: nonce) == proof, "proofs differ between Swift and Rust")
-    }
+    for entry in root["noise"] as? [[String: Any]] ?? [] { replayNoise(entry, check: check) }
     for entry in root["hello"] as? [[String: Any]] ?? [] {
         guard let json = entry["json"] as? String else { fail("bad hello entry") }
         check((try? JSONDecoder().decode(HelloMessage.self, from: Data(json.utf8))) != nil, "Swift cannot decode Rust hello JSON \(json)")
