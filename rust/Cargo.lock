@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "edgehop-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "edgehop-input",
  "edgehop-link",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "edgehop-discovery"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "edgehop-input",
  "edgehop-link",
@@ -79,14 +79,14 @@ dependencies = [
 
 [[package]]
 name = "edgehop-input"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "edgehop-proto",
 ]
 
 [[package]]
 name = "edgehop-link"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "edgehop-proto",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "edgehop-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "getrandom",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "edgehop-switch"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "edgehop-proto",
  "serde_json",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "edgehop-win"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "edgehop-discovery",
  "edgehop-input",

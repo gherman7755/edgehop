@@ -49,3 +49,22 @@ EDGEHOP_SMOKE=1 EDGEHOP_USER_DATA=$(mktemp -d) npx electron .    # after `npm ru
 ```
 CI runs all of this on macOS (Swift core) and Windows (Rust core); the smoke run launches the real Electron app,
 waits for the page to show a running core and asks it for a token through the preload bridge.
+
+## Packaging
+
+`electron-builder` (`ui/electron-builder.yml`) makes the DMG (Apple Silicon) and the Windows installer (x64). The
+core binary is staged in `ui/core-bin/` first (the Swift core on macOS, the Rust core on Windows) and ends up in
+`resources/core/`, which is where the app looks for it when it is packaged.
+
+```bash
+swift build -c release --product edgehop-core && mkdir -p ui/core-bin && cp .build/release/edgehop-core ui/core-bin/
+cd ui && npm run dist                   # release/EdgeHop-<version>-mac-arm64.dmg (on Windows: ...-win-x64-setup.exe)
+EDGEHOP_SMOKE=1 EDGEHOP_USER_DATA=$(mktemp -d) release/mac-arm64/EdgeHop.app/Contents/MacOS/EdgeHop    # smoke test of the package
+```
+* Not signed with a developer certificate: macOS gets an ad-hoc signature (valid on Apple Silicon, but Accessibility and
+  Input Monitoring are asked for again after each update), Windows shows SmartScreen. The release notes say so.
+* The Info.plist declares the Local Network usage and `_edgehop._tcp`, which finding other computers needs.
+* CI packages (`--dir`) and smoke-tests the packaged app on macOS and Windows on every pull request; the release
+  workflow builds the real installers.
+* Versions: `ui/package.json` is the release version. Keep `rust/Cargo.toml`, `Sources/EdgeHopIPC/CoreService.swift`
+  and `Resources/Info.plist` at the same number.
