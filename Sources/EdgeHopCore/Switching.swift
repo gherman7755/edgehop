@@ -43,6 +43,9 @@ public final class SwitchController {
 
     /// Trigger band in px: within this distance of the edge, moving outward, counts as pushing through.
     public static let band = 2.0
+    /// After entering the other computer, pushing back out only counts once the cursor has moved this many
+    /// pixels away from the edge it entered at (a jitter right after crossing must not bounce straight back).
+    public static let armDistance = 10.0
 
     private static let remoteId = "remote"
     private static let localId = "local"
@@ -59,7 +62,10 @@ public final class SwitchController {
     private var cursor: VirtualCursor?
     private var origin: Rect?
     private var state: Mode = .local
+    /// Buttons held, in either mode: while one is, neither computer is left (the release would go astray).
     private var buttonsDown = 0
+    /// The remote cursor has come `armDistance` away from the edge it entered at, so a return is allowed.
+    private var armed = false
     private var lastLocalPosition = Point(x: 0, y: 0)
     private var swallowTransitionMove = false
 
@@ -111,6 +117,7 @@ public final class SwitchController {
             guard buttonsDown == 0, let display = doorway(at: position, delta: delta) else { return }
             let entry = remoteEntry(from: position, display: display)
             state = .remote
+            armed = false
             origin = display
             cursor = VirtualCursor(detector: detector, monitorId: Self.remoteId, position: entry)
             actions.enterRemote()
@@ -119,11 +126,19 @@ public final class SwitchController {
             guard var vc = cursor else { return }
             let before = vc.position
             let crossing = vc.apply(dx: delta.x, dy: delta.y)
-            cursor = vc
             if let crossing, crossing.to == Self.localId {
-                leave(at: localReturn(from: crossing.entry), swallowCurrentMove: true)
-                return
+                // Not while a button is held (a drag stays on this computer), and not before the cursor has come
+                // away from the edge: then the push only holds the cursor at the edge.
+                if armed && buttonsDown == 0 {
+                    cursor = vc
+                    leave(at: localReturn(from: crossing.entry), swallowCurrentMove: true)
+                    return
+                }
+                vc = VirtualCursor(detector: detector, monitorId: Self.remoteId, position: Point(
+                    x: clamp(before.x + delta.x, 0, remoteWidth - 1), y: clamp(before.y + delta.y, 0, remoteHeight - 1)))
             }
+            cursor = vc
+            if distanceFromFacingEdge(vc.position) >= Self.armDistance { armed = true }
             let dx = Int32((vc.position.x - before.x).rounded())
             let dy = Int32((vc.position.y - before.y).rounded())
             if dx != 0 || dy != 0 { actions.send(.mouseMoveDelta(dx: dx, dy: dy)) }
@@ -141,6 +156,9 @@ public final class SwitchController {
             break // motion goes through handleMotion
         case (.remote, .key):
             if forwardKeys { actions.send(event) }
+        case let (.remote, .mouseButton(_, isDown)):
+            buttonsDown = max(0, buttonsDown + (isDown ? 1 : -1))
+            actions.send(event)
         case (.remote, _):
             actions.send(event)
         }
@@ -210,6 +228,16 @@ public final class SwitchController {
 
     /// Global position on the origin display for a return crossing (`exit` is in the placeholder's space,
     /// whose along-edge coordinate equals the remote-local one).
+    /// How far `p` is from the remote edge that faces this computer (the one the cursor entered at).
+    private func distanceFromFacingEdge(_ p: Point) -> Double {
+        switch side {
+        case .right: return p.x
+        case .left: return remoteWidth - 1 - p.x
+        case .bottom: return p.y
+        case .top: return remoteHeight - 1 - p.y
+        }
+    }
+
     private func localReturn(from exit: Point) -> Point {
         guard let d = origin else { return lastLocalPosition }
         switch side {

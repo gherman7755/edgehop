@@ -260,6 +260,11 @@ func generateScenarios() {
         motion(0, 0, -5, 0), motion(0, 0, -5, 0), swallowStep(.mouseMoveAbsolute(x: 1, y: 1)), swallowStep(.mouseMoveAbsolute(x: 1, y: 1)),
         motion(1696, -500, 6, 0), motion(0, 0, 40, 0), ["op": "return"], ["op": "return"],
     ]))
+    out.append(runScenario(name: "guards: jitter after entering, drag on the other computer", displays: [laptop], side: .right, remote: (1440, 900), forwardKeys: false, steps: [
+        motion(1511, 500, 6, 0), motion(1511, 500, -1, 0), motion(0, 0, 9, 0), motion(0, 0, -20, 0), motion(0, 0, 10, 0),
+        handleStep(.mouseButton(.left, isDown: true)), motion(0, 0, -30, 0), motion(0, 0, -30, 0),
+        handleStep(.mouseButton(.left, isDown: false)), motion(0, 0, -5, 0), swallowStep(.mouseMoveAbsolute(x: 1, y: 1)),
+    ]))
     out.append(runScenario(name: "keys forwarded", displays: [laptop], side: .left, remote: (1440, 900), forwardKeys: true, steps: [
         swallowStep(.key(code: 0, isDown: true, modifiers: [])), motion(0, 300, -6, 0), handleStep(.key(code: 0, isDown: true, modifiers: [.shift])),
         swallowStep(.key(code: 0, isDown: true, modifiers: [])), motion(1439, 300, 3, 0),

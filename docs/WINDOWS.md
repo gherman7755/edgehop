@@ -71,3 +71,13 @@ clamped at a screen edge. Locally the movement is the raw (unaccelerated) device
 cursor is stopped at an edge, so an outward push is recognised. This is `MotionMapper`. On return the cursor is
 warped to the crossing point. The first move or two after parking may be measured against the old position; if that
 shows as a jump on real hardware, it needs a guard.
+
+## Edge switching rules (Swift and Rust, identical)
+
+* Enter through the outer edge of a display on the chosen side, with a 2 px band; the entry keeps its offset along
+  the edge. Return through the facing edge of the other computer.
+* **No switching while a button is held**, in either direction: a drag stays on the computer it started on (the
+  cursor is held at the edge until the button is released).
+* **No bounce:** after entering, a push back out only counts once the cursor has moved 10 px away from the
+  entry edge, so a one-pixel jitter right after crossing does not send you straight back.
+* Stopping, a lost link or shutdown always return control, whatever is held.

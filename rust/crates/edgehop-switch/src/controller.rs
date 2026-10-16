@@ -7,6 +7,11 @@ use crate::geometry::{Point, Rect, Side};
 /// Trigger band in pixels: within this distance of an edge, moving outward, counts as pushing through.
 pub const BAND: f64 = 2.0;
 
+/// After entering the other computer, pushing back out only counts once the cursor has moved this many pixels
+/// away from the edge it entered at. The cursor starts exactly on that edge, so without this a one-pixel
+/// jitter of the mouse right after crossing would bounce straight back.
+pub const ARM_DISTANCE: f64 = 10.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// This computer's keyboard and mouse drive this computer.
@@ -40,7 +45,10 @@ struct Inner {
     cursor: Option<RemoteCursor>,
     /// The local display we left from.
     origin: Option<Rect>,
+    /// Buttons held, in either mode: while one is, neither computer is left (the release would go astray).
     buttons_down: usize,
+    /// The remote cursor has moved [`ARM_DISTANCE`] away from the edge it entered at, so a return is allowed.
+    armed: bool,
     last_local: Point,
     swallow_transition_move: bool,
 }
@@ -99,6 +107,7 @@ impl<A: Actions> SwitchController<A> {
                 cursor: None,
                 origin: None,
                 buttons_down: 0,
+                armed: false,
                 last_local: Point::default(),
                 swallow_transition_move: false,
             }),
@@ -128,6 +137,7 @@ impl<A: Actions> SwitchController<A> {
                 };
                 let entry = self.remote_entry(position, &display);
                 inner.mode = Mode::Remote;
+                inner.armed = false;
                 inner.origin = Some(display);
                 inner.cursor = Some(RemoteCursor {
                     x: entry.x,
@@ -146,9 +156,16 @@ impl<A: Actions> SwitchController<A> {
                     y: clamp(before.y + delta.y, 0.0, self.remote_height - 1.0),
                 };
                 if let Some(along) = self.return_crossing(moved, delta) {
-                    let to = self.local_return(&inner, along);
-                    self.leave(&mut inner, to, true);
-                    return;
+                    // Not while a button is held (a drag stays on this computer), and not before the cursor
+                    // has come away from the edge: then the push only holds the cursor at the edge.
+                    if inner.armed && inner.buttons_down == 0 {
+                        let to = self.local_return(&inner, along);
+                        self.leave(&mut inner, to, true);
+                        return;
+                    }
+                }
+                if self.distance_from_facing_edge(moved) >= ARM_DISTANCE {
+                    inner.armed = true;
                 }
                 inner.cursor = Some(moved);
                 let dx = (moved.x - before.x).round() as i32;
@@ -181,6 +198,14 @@ impl<A: Actions> SwitchController<A> {
                 if self.forward_keys {
                     self.actions.send(*event);
                 }
+            }
+            (Mode::Remote, InputEvent::MouseButton { is_down, .. }) => {
+                inner.buttons_down = if *is_down {
+                    inner.buttons_down + 1
+                } else {
+                    inner.buttons_down.saturating_sub(1)
+                };
+                self.actions.send(*event);
             }
             (Mode::Remote, _) => self.actions.send(*event),
         }
@@ -265,6 +290,16 @@ impl<A: Actions> SwitchController<A> {
             Side::Left => Point::new(w - 1.0, clamp(p.y - display.min_y(), 0.0, h - 1.0)),
             Side::Bottom => Point::new(clamp(p.x - display.min_x(), 0.0, w - 1.0), 0.0),
             Side::Top => Point::new(clamp(p.x - display.min_x(), 0.0, w - 1.0), h - 1.0),
+        }
+    }
+
+    /// How far `p` is from the remote edge that faces this computer (the one the cursor entered at).
+    fn distance_from_facing_edge(&self, p: RemoteCursor) -> f64 {
+        match self.side {
+            Side::Right => p.x,
+            Side::Left => self.remote_width - 1.0 - p.x,
+            Side::Bottom => p.y,
+            Side::Top => self.remote_height - 1.0 - p.y,
         }
     }
 
@@ -494,7 +529,8 @@ mod tests {
     fn returns_through_the_facing_edge_to_the_display_we_left() {
         let (c, rec) = standard();
         c.handle_motion(p(1696.0, -500.0), p(6.0, 0.0)); // left from the monitor above
-        c.handle_motion(p(0.0, 0.0), p(-5.0, 0.0)); // remote x is 0: facing edge
+        c.handle_motion(p(0.0, 0.0), p(20.0, 0.0)); // come away from the entry edge
+        c.handle_motion(p(0.0, 0.0), p(-25.0, 0.0)); // remote x reaches 0: facing edge
         assert_eq!(c.mode(), Mode::Local);
         assert_eq!(rec.order(), vec!["enter", "release", "leave"]);
         assert_eq!(rec.left(), vec![p(1696.0, -500.0)]); // back on the monitor above, same height
@@ -577,6 +613,38 @@ mod tests {
         assert_eq!(rec.released.load(Ordering::SeqCst), 1);
         assert_eq!(rec.left(), vec![p(1511.0, 321.0)]);
         assert!(!c.should_swallow(&abs(5, 5))); // a panic exit must not swallow a stray move
+    }
+
+    #[test]
+    fn does_not_bounce_straight_back_after_entering() {
+        let (c, rec) = standard();
+        c.handle_motion(p(1511.0, 500.0), p(6.0, 0.0));
+        // A jitter to the left right after crossing only holds the cursor at the edge.
+        c.handle_motion(p(1511.0, 500.0), p(-1.0, 0.0));
+        c.handle_motion(p(0.0, 0.0), p(9.0, 0.0)); // 9 px in: not far enough yet
+        c.handle_motion(p(0.0, 0.0), p(-20.0, 0.0));
+        assert_eq!(c.mode(), Mode::Remote);
+        assert!(rec.left().is_empty());
+        c.handle_motion(p(0.0, 0.0), p(10.0, 0.0)); // 10 px in: armed
+        c.handle_motion(p(0.0, 0.0), p(-20.0, 0.0));
+        assert_eq!(c.mode(), Mode::Local);
+    }
+
+    #[test]
+    fn a_drag_started_on_the_other_computer_stays_there() {
+        let (c, rec) = standard();
+        c.handle_motion(p(1511.0, 500.0), p(6.0, 0.0));
+        c.handle_motion(p(0.0, 0.0), p(30.0, 0.0));
+        c.handle(&button(MouseButton::Left, true));
+        c.handle_motion(p(0.0, 0.0), p(-60.0, 0.0)); // pushes through the facing edge, button held
+        assert_eq!(c.mode(), Mode::Remote);
+        assert!(rec.left().is_empty());
+        assert!(rec.sent().contains(&button(MouseButton::Left, true)));
+        // The cursor was held at the edge: only the 30 px that were left were applied.
+        assert_eq!(rec.sent().last(), Some(&delta(-30, 0)));
+        c.handle(&button(MouseButton::Left, false));
+        c.handle_motion(p(0.0, 0.0), p(-5.0, 0.0));
+        assert_eq!(c.mode(), Mode::Local);
     }
 
     #[test]
