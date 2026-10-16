@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use edgehop_input::{
-    CaptureHandle, CaptureSink, OsInput, Platform, PlatformError, Rect as InputRect,
+    CaptureHandle, CaptureSink, OsInput, PanicGuard, Platform, PlatformError, Rect as InputRect,
 };
 use edgehop_proto::{InputEvent, Modifiers, MonitorInfo, MouseButton};
 use serde_json::Value;
@@ -144,7 +144,14 @@ struct FakePlatform {
     ops: Ops,
     capture: Arc<Mutex<Option<Arc<FakeCapture>>>>,
     fail_capture: bool,
+    /// Where `watch_panic` leaves the callback, so a test can type the panic chord; `None` = unsupported.
+    panic_watch: Option<PanicSlot>,
 }
+
+type PanicSlot = Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>;
+
+struct FakePanicGuard;
+impl PanicGuard for FakePanicGuard {}
 
 impl FakePlatform {
     fn new(name: &'static str, width: f64, height: f64) -> Self {
@@ -155,6 +162,7 @@ impl FakePlatform {
             ops: Ops::default(),
             capture: Arc::default(),
             fail_capture: false,
+            panic_watch: Some(Arc::default()),
         }
     }
 }
@@ -190,6 +198,18 @@ impl Platform for FakePlatform {
             position: (0.0, 0.0),
             bounds: InputRect::new(0.0, 0.0, self.width, self.height),
         }
+    }
+
+    fn watch_panic(
+        &self,
+        on_panic: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Box<dyn PanicGuard>, PlatformError> {
+        let slot = self
+            .panic_watch
+            .as_ref()
+            .ok_or_else(|| PlatformError("no keyboard access".into()))?;
+        *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(on_panic);
+        Ok(Box::new(FakePanicGuard))
     }
 
     fn start_capture(
@@ -265,6 +285,7 @@ struct Rig {
     receiver: SessionBackend<FakePlatform>,
     receiver_ops: Ops,
     receiver_events: (Events, Buffer),
+    receiver_panic: PanicSlot,
     controller: SessionBackend<FakePlatform>,
     controller_capture: Arc<Mutex<Option<Arc<FakeCapture>>>>,
     controller_events: (Events, Buffer),
@@ -284,6 +305,7 @@ impl Rig {
     fn with(allow_keys: bool, fail_capture: bool) -> Self {
         let receiver_platform = FakePlatform::new("receiver-pc", 800.0, 600.0);
         let receiver_ops = receiver_platform.ops.clone();
+        let receiver_panic = receiver_platform.panic_watch.clone().expect("panic watch");
         let mut controller_platform = FakePlatform::new("controller-pc", 1000.0, 800.0);
         controller_platform.fail_capture = fail_capture;
         let controller_capture = Arc::clone(&controller_platform.capture);
@@ -304,6 +326,7 @@ impl Rig {
             receiver,
             receiver_ops,
             receiver_events,
+            receiver_panic,
             controller: SessionBackend::new(controller_platform),
             controller_capture,
             controller_events: events(),
@@ -1005,6 +1028,114 @@ fn a_controller_does_not_send_keys_to_a_receiver_that_does_not_announce_the_key_
         lines
             .iter()
             .any(|l| l.contains("the keyboard is not shared")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn the_panic_chord_on_the_receiver_stops_it_and_lets_the_controller_go() {
+    let rig = Rig::new(false);
+    let capture = rig.start(true, false);
+    right_edge_push(&capture);
+    wait_until("the receiver to see the peer", || {
+        matches!(
+            rig.receiver.receiver_state(),
+            ReceiverState::Connected { .. }
+        )
+    });
+
+    // The person at the receiver types the chord.
+    (rig.receiver_panic
+        .lock()
+        .unwrap()
+        .as_ref()
+        .expect("watching"))();
+    wait_until("the receiver to stop", || {
+        rig.receiver.receiver_state() == ReceiverState::Stopped
+    });
+    wait_until("the controller to notice", || {
+        rig.controller.controller_state() == ControllerState::Idle
+    });
+    let lines: Vec<String> = rig
+        .receiver_events
+        .1
+        .events("log")
+        .iter()
+        .filter_map(|d| d["line"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        lines.iter().any(|l| l == "panic chord: stopping"),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn the_panic_chord_on_the_controller_stops_sharing_and_is_not_forwarded() {
+    let rig = Rig::new(true);
+    let capture = rig.start(true, true);
+    right_edge_push(&capture);
+    let chord = InputEvent::Key {
+        code: edgehop_proto::HID_ESCAPE,
+        is_down: true,
+        modifiers: Modifiers::CONTROL | Modifiers::OPTION | Modifiers::COMMAND,
+    };
+    capture.sink.event(chord);
+    wait_until("the controller to stop", || {
+        rig.controller.controller_state() == ControllerState::Idle
+    });
+    assert!(capture.stopped.load(Ordering::SeqCst));
+    let calls = capture.calls();
+    assert!(
+        calls.iter().any(|c| c.starts_with("leave")),
+        "control came back: {calls:?}"
+    );
+    assert!(
+        !rig.receiver_ops
+            .all()
+            .iter()
+            .any(|op| matches!(op, Op::Key { .. })),
+        "the chord is for EdgeHop, not for the other computer"
+    );
+    assert_eq!(
+        rig.controller_events
+            .1
+            .states("controller.state")
+            .last()
+            .map(String::as_str),
+        Some("idle")
+    );
+}
+
+#[test]
+fn a_receiver_without_keyboard_access_warns_but_still_listens() {
+    let mut platform = FakePlatform::new("receiver-pc", 800.0, 600.0);
+    platform.panic_watch = None;
+    let backend = SessionBackend::new(platform);
+    let (events, buffer) = events();
+    backend
+        .start_receiver(
+            ReceiverConfig {
+                token: TOKEN.into(),
+                allow_keys: false,
+                debug: false,
+                port: 0,
+            },
+            events,
+        )
+        .expect("starts anyway");
+    assert!(matches!(
+        backend.receiver_state(),
+        ReceiverState::Listening { .. }
+    ));
+    let lines: Vec<String> = buffer
+        .events("log")
+        .iter()
+        .filter_map(|d| d["line"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("WARNING: no local panic chord")),
         "{lines:?}"
     );
 }
