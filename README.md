@@ -33,6 +33,7 @@ network you trust. No license has been chosen yet (all rights reserved by defaul
 | `rust/crates/edgehop-link` | The Rust TCP link: token-authenticated server and client on `edgehop-proto` (std threads, no async runtime) |
 | `rust/crates/edgehop-input`, `rust/crates/edgehop-win` | Input injection logic shared by every platform (`OsInput` trait, tested with a fake) and the Windows layer (displays, `SendInput`, mouse hook and raw input); see `docs/WINDOWS.md` |
 | `rust/crates/edgehop-switch` | Edge switching in Rust: a port of the Swift `SwitchController`, replayed against scenarios recorded from the Swift one |
+| `ui/` | Electron desktop UI (React + TypeScript): a front end for either core over the IPC; see `docs/UI.md` |
 | `scripts/check-link-interop.sh` | Swift and Rust links must interoperate over real TCP, both directions |
 | `scripts/golden-vectors.sh`, `scripts/check-rust-compat.sh` | Cross-language wire checks between the Swift core and the Rust crate |
 | `Sources/EdgeHopCore/Link.swift` | M4 plaintext TCP link: `LinkServer`/`LinkClient`, token challenge-response, hello/ping/input frames, `PanicChord` |
@@ -73,10 +74,15 @@ The Log section has a "Verbose diagnostics" switch and a Copy button: paste it w
 Because the app is ad-hoc signed, re-grant Accessibility / Input Monitoring after each rebuild.
 The Command Line Tools have no SwiftUI macro plugin: do not use `@State` (keep view state in `AppModel`).
 
+## Desktop UI (Electron)
+
+`ui/` is a modern desktop front end for macOS and Windows that drives either core over the IPC below. See
+`docs/UI.md`; in short: build a core, then `cd ui && npm ci && npm run dev`.
+
 ## Core helper (IPC)
 
-The core can run as a headless helper that any UI drives (planned: an Electron UI on macOS and Windows, with a
-Rust core on Windows speaking the same API). See `docs/IPC.md`.
+The core can run as a headless helper that any UI drives: the Electron UI above, with the Swift core on macOS and
+the Rust core on Windows speaking the same API. See `docs/IPC.md`.
 
 ```bash
 swift build --product edgehop-core

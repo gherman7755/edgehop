@@ -6,9 +6,13 @@ import { locateCore } from './core/locate';
 import { CoreSupervisor } from './core/supervisor';
 import { localAddresses } from './network';
 import { SettingsStore, type Vault } from './settings';
+import { runSmoke } from './smoke';
 import { createTray, type TrayHandle } from './tray';
 
 const isMac = process.platform === 'darwin';
+
+// Tests run against a throw-away profile, never the real settings.
+if (process.env.EDGEHOP_USER_DATA) app.setPath('userData', process.env.EDGEHOP_USER_DATA);
 
 if (!app.requestSingleInstanceLock()) {
 	// Two copies would fight over the port and the input hooks.
@@ -179,5 +183,21 @@ void app.whenReady().then(async () => {
 		send('core:event', { event: 'log', data: { source: 'core', line } } satisfies CoreEvent);
 	});
 	createWindow();
+	if (process.env.EDGEHOP_SMOKE) {
+		const started = supervisor.start();
+		try {
+			await started;
+			console.log(await runSmoke(window!));
+			quitting = true;
+			await supervisor.stop();
+			app.exit(0);
+		} catch (error) {
+			console.error(String(error));
+			quitting = true;
+			await supervisor.stop();
+			app.exit(1);
+		}
+		return;
+	}
 	await supervisor.start();
 });
