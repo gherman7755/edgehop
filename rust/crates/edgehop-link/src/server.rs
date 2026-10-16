@@ -38,6 +38,9 @@ pub struct ServerConfig {
     pub auth_timeout: Duration,
     /// Announce HID key codes in the handshake (`false` only to play an older computer in tests).
     pub announce_keymap: bool,
+    /// Tell the controller this computer cannot apply input right now (a test stand-in for a missing macOS
+    /// permission; the Windows core never needs it).
+    pub input_blocked: bool,
 }
 
 impl ServerConfig {
@@ -50,6 +53,7 @@ impl ServerConfig {
             monitors: Vec::new(),
             auth_timeout: Duration::from_secs(5),
             announce_keymap: true,
+            input_blocked: false,
         }
     }
 }
@@ -210,6 +214,7 @@ fn serve_peer(shared: &Shared, mut stream: TcpStream, id: u64) {
         config.announce_keymap,
     );
     accepted.accepted = Some(true);
+    accepted.input_blocked = config.input_blocked.then_some(true);
     accepted.monitors = Some(config.monitors.clone());
     if writer.send(&accepted.to_frame()).is_err() {
         return;

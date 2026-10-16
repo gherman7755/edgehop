@@ -27,6 +27,14 @@ pub struct HelloMessage {
     /// no keys can be exchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keymap: Option<String>,
+    /// `true` (in a receiver's hello) if that computer cannot apply input right now, for example because a macOS
+    /// permission is missing. Absent: it can.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "inputBlocked"
+    )]
+    pub input_blocked: Option<bool>,
 }
 
 impl HelloMessage {
@@ -37,6 +45,7 @@ impl HelloMessage {
             accepted: None,
             monitors: None,
             keymap: None,
+            input_blocked: None,
         }
     }
 
@@ -49,6 +58,11 @@ impl HelloMessage {
     /// True if the sender announced HID key codes.
     pub fn speaks_hid_keys(&self) -> bool {
         self.keymap.as_deref() == Some(crate::KEYMAP_NAME)
+    }
+
+    /// True if the sender announced that it cannot apply input.
+    pub fn is_input_blocked(&self) -> bool {
+        self.input_blocked == Some(true)
     }
 
     pub fn to_frame(&self) -> Frame {
@@ -90,6 +104,21 @@ mod tests {
     fn omits_absent_fields() {
         let json = String::from_utf8(HelloMessage::new("PC").to_frame().payload).unwrap();
         assert_eq!(json, r#"{"version":2,"name":"PC"}"#);
+    }
+
+    #[test]
+    fn reads_the_input_blocked_announcement_of_the_swift_core() {
+        let frame = Frame::new(
+            FrameType::Hello,
+            br#"{"version":2,"name":"Mac","accepted":true,"inputBlocked":true}"#.to_vec(),
+        );
+        assert!(HelloMessage::from_frame(&frame).unwrap().is_input_blocked());
+        let plain = HelloMessage::new("PC");
+        assert!(!plain.is_input_blocked());
+        let mut blocked = plain;
+        blocked.input_blocked = Some(true);
+        let json = String::from_utf8(blocked.to_frame().payload).unwrap();
+        assert_eq!(json, r#"{"version":2,"name":"PC","inputBlocked":true}"#);
     }
 
     #[test]
