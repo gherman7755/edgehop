@@ -7,15 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use edgehop_proto::{
-    ping_payload, proof, rtt_millis, ControlMessage, Frame, FrameType, HelloMessage, InputEvent,
+    ping_payload, rtt_millis, ControlMessage, Frame, FrameType, HelloMessage, InputEvent,
     MonitorInfo,
 };
 
 use crate::conn::{lock, now_millis, FrameReader, FrameWriter, ReadError};
 use crate::error::LinkError;
+use crate::handshake::{initiate, HandshakeError};
 
 /// Callbacks run on the reader thread.
 pub trait ClientHandler: Send + Sync + 'static {
@@ -65,41 +64,42 @@ impl LinkClient {
         handler: Arc<dyn ClientHandler>,
     ) -> Result<(Self, HelloMessage), LinkError> {
         let deadline = Instant::now() + config.timeout;
-        let stream = open(host, port, config.timeout, deadline)?;
+        let mut stream = open(host, port, config.timeout, deadline)?;
         let _ = stream.set_nodelay(true);
         let write_half = stream
             .try_clone()
             .map_err(|e| LinkError::Connection(e.to_string()))?;
-        let mut reader = FrameReader::new(stream);
 
-        // 1. the receiver's challenge
-        let challenge = next(&mut reader, deadline, config.timeout)?;
-        let nonce = HelloMessage::from_frame(&challenge)
-            .and_then(|hello| hello.nonce)
-            .and_then(|text| STANDARD.decode(text).ok())
-            .ok_or_else(|| LinkError::Protocol("expected a challenge".into()))?;
-
-        // 2. our proof
-        let writer = Arc::new(FrameWriter::new(write_half));
-        let mut answer = HelloMessage::new(config.name.clone());
+        // The encrypted handshake: it only gets through if both computers know the token. Our hello (name,
+        // monitors, key map) is the payload of its last message.
+        let mut hello = HelloMessage::new(config.name.clone());
         if config.announce_keymap {
-            answer = answer.with_keymap();
+            hello = hello.with_keymap();
         }
-        answer.proof = Some(STANDARD.encode(proof(&config.token, &nonce)));
-        answer.monitors = Some(config.monitors.clone());
-        writer
-            .send(&answer.to_frame())
-            .map_err(|e| LinkError::Connection(e.to_string()))?;
+        hello.monitors = Some(config.monitors.clone());
+        let (sealer, opener) = initiate(
+            &mut stream,
+            &config.token,
+            &hello.to_frame().payload,
+            deadline,
+        )
+        .map_err(|e| handshake_error(e, config.timeout))?;
+        let writer = Arc::new(FrameWriter::new(write_half, sealer));
+        let mut reader = FrameReader::new(stream, opener);
 
-        // 3. accepted or not
-        let verdict = next(&mut reader, deadline, config.timeout)?;
-        let hello = HelloMessage::from_frame(&verdict)
-            .filter(|hello| hello.accepted.is_some())
-            .ok_or_else(|| LinkError::Protocol("expected an answer to the proof".into()))?;
-        if hello.accepted != Some(true) {
-            writer.shutdown();
-            return Err(LinkError::Rejected);
-        }
+        // The receiver answers with the first encrypted frame; a receiver that could not verify our last
+        // handshake message (a different token) just hangs up instead.
+        let answer = match reader.next_frame(Some(deadline)) {
+            Ok(frame) => frame,
+            Err(ReadError::Closed) => {
+                writer.shutdown();
+                return Err(LinkError::Rejected);
+            }
+            Err(error) => return Err(read_error(error, config.timeout)),
+        };
+        let hello = HelloMessage::from_frame(&answer)
+            .filter(|hello| hello.accepted == Some(true))
+            .ok_or_else(|| LinkError::Protocol("expected the receiver's answer".into()))?;
 
         let closing = Arc::new(AtomicBool::new(false));
         let thread_closing = Arc::clone(&closing);
@@ -181,14 +181,29 @@ fn open(
     )))
 }
 
-fn next(
-    reader: &mut FrameReader,
-    deadline: Instant,
-    timeout: Duration,
-) -> Result<Frame, LinkError> {
-    reader.next_frame(Some(deadline)).map_err(|e| match e {
-        ReadError::TimedOut => LinkError::Connection(format!(
+fn handshake_error(error: HandshakeError, timeout: Duration) -> LinkError {
+    match error {
+        HandshakeError::TimedOut => LinkError::Connection(format!(
             "connected, but the other computer did not answer the handshake within {} s \
+             (is it running EdgeHop, on the same port and version?)",
+            timeout.as_secs()
+        )),
+        HandshakeError::Closed => {
+            LinkError::Connection("the other computer closed the connection".into())
+        }
+        HandshakeError::Io(e) => LinkError::Connection(e.to_string()),
+        HandshakeError::OlderEdgeHop => LinkError::Protocol(
+            "the other computer runs an older, unencrypted EdgeHop: update it there".into(),
+        ),
+        HandshakeError::Noise => LinkError::Protocol("the encrypted handshake failed".into()),
+        HandshakeError::Stopped => LinkError::Connection("stopped".into()),
+    }
+}
+
+fn read_error(error: ReadError, timeout: Duration) -> LinkError {
+    match error {
+        ReadError::TimedOut => LinkError::Connection(format!(
+            "connected, but the other computer did not answer within {} s \
              (is it running EdgeHop, on the same port and version?)",
             timeout.as_secs()
         )),
@@ -197,7 +212,10 @@ fn next(
         }
         ReadError::Io(e) => LinkError::Connection(e.to_string()),
         ReadError::Frame(e) => LinkError::Protocol(e.to_string()),
-    })
+        ReadError::Crypto => {
+            LinkError::Protocol("the encrypted link failed to verify a message".into())
+        }
+    }
 }
 
 fn read_loop(

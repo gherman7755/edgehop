@@ -7,14 +7,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use edgehop_link::{
     ClientConfig, ClientHandler, LinkClient, LinkError, LinkServer, ServerConfig, ServerHandler,
 };
 use edgehop_proto::{
-    encode_frame, proof, ControlMessage, Frame, FrameDecoder, FrameType, HelloMessage, InputEvent,
-    Modifiers, MonitorInfo, MouseButton,
+    encode_frame, with_length, ControlMessage, Frame, FrameDecoder, FrameType, Handshake,
+    HelloMessage, InputEvent, MessageReader, Modifiers, MonitorInfo, MouseButton, Opener, Role,
+    Sealer,
 };
 
 const TOKEN: &str = "loopback-secret-1";
@@ -99,42 +98,98 @@ fn connect(
     Ok((client, hello, handler))
 }
 
-/// Reads frames from a raw socket until one is complete.
-fn read_frame(stream: &mut TcpStream, decoder: &mut FrameDecoder) -> Option<Frame> {
-    let mut buffer = [0u8; 4096];
-    loop {
-        let n = stream.read(&mut buffer).ok()?;
-        if n == 0 {
-            return None;
-        }
-        if let Some(frame) = decoder.feed(&buffer[..n]).unwrap().into_iter().next() {
-            return Some(frame);
+/// A hand-written peer on a raw socket, speaking the encrypted protocol by hand so that tests can misbehave.
+struct RawPeer {
+    stream: TcpStream,
+    sealer: Sealer,
+    opener: Opener,
+    decoder: FrameDecoder,
+    /// Everything this peer has read from the socket, before decryption.
+    wire: Vec<u8>,
+}
+
+impl RawPeer {
+    /// Sends a frame, encrypted.
+    fn send(&mut self, frame: &Frame) {
+        let sealed = self.sealer.seal(&encode_frame(frame).unwrap()).unwrap();
+        self.stream.write_all(&sealed).unwrap();
+    }
+
+    /// Sends bytes as they are (damaged, for instance).
+    fn send_raw(&mut self, bytes: &[u8]) {
+        self.stream.write_all(bytes).unwrap();
+    }
+
+    fn next_frame(&mut self) -> Option<Frame> {
+        let mut buffer = [0u8; 4096];
+        loop {
+            let n = self.stream.read(&mut buffer).ok()?;
+            if n == 0 {
+                return None;
+            }
+            self.wire.extend_from_slice(&buffer[..n]);
+            let plaintext = self.opener.open(&buffer[..n]).ok()?;
+            if let Some(frame) = self.decoder.feed(&plaintext).unwrap().into_iter().next() {
+                return Some(frame);
+            }
         }
     }
 }
 
-/// Authenticates by hand and returns the raw, authenticated socket.
-fn raw_authenticated(port: u16) -> TcpStream {
+/// Reads one whole length-prefixed handshake message from a raw socket.
+fn read_message(stream: &mut TcpStream, reader: &mut MessageReader) -> Option<Vec<u8>> {
+    let mut buffer = [0u8; 4096];
+    loop {
+        if let Some(message) = reader.next_message() {
+            return Some(message);
+        }
+        let n = stream.read(&mut buffer).ok()?;
+        if n == 0 {
+            return None;
+        }
+        reader.push(&buffer[..n]);
+    }
+}
+
+/// Does the encrypted handshake by hand with `token` and sends `hello` as the payload of the last message.
+/// `None` if the server hung up instead (what it does when the token is wrong).
+fn raw_handshake(port: u16, token: &str, hello: &HelloMessage) -> Option<RawPeer> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let mut decoder = FrameDecoder::new();
-    let challenge = read_frame(&mut stream, &mut decoder).expect("challenge");
-    let nonce = STANDARD
-        .decode(HelloMessage::from_frame(&challenge).unwrap().nonce.unwrap())
-        .unwrap();
-    let mut answer = HelloMessage::new("raw");
-    answer.proof = Some(STANDARD.encode(proof(TOKEN, &nonce)));
+    let mut handshake = Handshake::new(Role::Initiator, token).unwrap();
     stream
-        .write_all(&encode_frame(&answer.to_frame()).unwrap())
+        .write_all(&with_length(&handshake.write(&[]).unwrap()))
         .unwrap();
-    let verdict = read_frame(&mut stream, &mut decoder).expect("verdict");
+    let mut reader = MessageReader::new();
+    let second = read_message(&mut stream, &mut reader)?;
+    handshake.read(&second).unwrap();
+    stream
+        .write_all(&with_length(
+            &handshake.write(&hello.to_frame().payload).unwrap(),
+        ))
+        .unwrap();
+    let (sealer, opener) = handshake.into_transport().unwrap();
+    Some(RawPeer {
+        stream,
+        sealer,
+        opener,
+        decoder: FrameDecoder::new(),
+        wire: Vec::new(),
+    })
+}
+
+/// A raw peer that has been accepted (the receiver's answer has been read).
+fn raw_authenticated(port: u16) -> RawPeer {
+    let mut peer = raw_handshake(port, TOKEN, &HelloMessage::new("raw").with_keymap())
+        .expect("the handshake with the right token");
+    let answer = peer.next_frame().expect("the receiver's answer");
     assert_eq!(
-        HelloMessage::from_frame(&verdict).unwrap().accepted,
+        HelloMessage::from_frame(&answer).unwrap().accepted,
         Some(true)
     );
-    stream
+    peer
 }
 
 #[test]
@@ -301,17 +356,12 @@ fn refuses_a_second_concurrent_peer() {
 }
 
 #[test]
-fn drops_an_unauthenticated_peer_after_the_timeout() {
+fn drops_a_peer_that_never_finishes_the_handshake_after_the_timeout() {
     let (server, recorder) = start_server(Duration::from_millis(300));
     let mut stream = TcpStream::connect(("127.0.0.1", server.port())).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let mut decoder = FrameDecoder::new();
-    assert!(
-        read_frame(&mut stream, &mut decoder).is_some(),
-        "the challenge comes first"
-    );
     // Say nothing: the server must hang up.
     let started = Instant::now();
     let mut buffer = [0u8; 16];
@@ -329,43 +379,112 @@ fn drops_an_unauthenticated_peer_after_the_timeout() {
 }
 
 #[test]
-fn drops_a_first_frame_that_is_not_a_hello() {
-    let (server, recorder) = start_server(Duration::from_secs(5));
+fn a_peer_that_does_not_speak_the_handshake_is_dropped() {
+    // What an EdgeHop from before the encrypted link sends first is a hello frame, starting with "EH".
+    let (server, recorder) = start_server(Duration::from_millis(400));
     let mut stream = TcpStream::connect(("127.0.0.1", server.port())).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let mut decoder = FrameDecoder::new();
-    read_frame(&mut stream, &mut decoder).expect("challenge");
     stream
-        .write_all(&encode_frame(&Frame::new(FrameType::Ping, vec![0; 8])).unwrap())
+        .write_all(b"EH\x01\x00\x00\x00\x00\x10{\"version\":1}")
         .unwrap();
-    let mut buffer = [0u8; 256];
-    // The server answers with a refusal and closes: either way we reach end of stream.
-    let mut closed = false;
-    for _ in 0..4 {
-        match stream.read(&mut buffer) {
-            Ok(0) | Err(_) => {
-                closed = true;
-                break;
-            }
-            Ok(_) => {}
-        }
-    }
-    assert!(closed);
+    let mut buffer = [0u8; 64];
+    assert_eq!(
+        stream.read(&mut buffer).unwrap_or(0),
+        0,
+        "it must hang up without answering"
+    );
     assert!(recorder.connected.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_wrong_token_gets_no_answer_at_all() {
+    let (server, recorder) = start_server(Duration::from_secs(5));
+    let mut peer = raw_handshake(server.port(), "not-the-token-xx", &HelloMessage::new("raw"))
+        .expect("the first two messages do not depend on the token");
+    assert!(peer.next_frame().is_none(), "the server hung up");
+    assert!(peer.wire.is_empty(), "nothing was written back");
+    assert!(recorder.connected.lock().unwrap().is_empty());
+}
+
+#[test]
+fn nothing_readable_crosses_the_wire() {
+    let (server, _) = start_server(Duration::from_secs(5));
+    let mut peer = raw_handshake(server.port(), TOKEN, &HelloMessage::new("raw")).unwrap();
+    assert!(peer.next_frame().is_some());
+    // The receiver's answer carries its name ("srv") and its monitors: none of it is in the clear.
+    let wire = String::from_utf8_lossy(&peer.wire).to_string();
+    assert!(
+        !wire.contains("srv") && !wire.contains("monitors") && !wire.contains("accepted"),
+        "{wire:?}"
+    );
+    assert!(!peer.wire.is_empty());
+}
+
+#[test]
+fn a_damaged_message_drops_the_peer() {
+    let (server, recorder) = start_server(Duration::from_secs(5));
+    let mut peer = raw_authenticated(server.port());
+    wait_until("peer connected", || {
+        recorder.connected.lock().unwrap().len() == 1
+    });
+    let mut sealed = peer
+        .sealer
+        .seal(&encode_frame(&Frame::new(FrameType::Ping, vec![0; 8])).unwrap())
+        .unwrap();
+    *sealed.last_mut().unwrap() ^= 1;
+    peer.send_raw(&sealed);
+    wait_until("the peer to be dropped", || {
+        recorder.disconnects.load(Ordering::SeqCst) == 1
+    });
+}
+
+#[test]
+fn a_frame_larger_than_one_encrypted_message_arrives_whole() {
+    let (server, _) = start_server(Duration::from_secs(5));
+    let mut peer = raw_authenticated(server.port());
+    // A layout frame is ignored by the receiver, but it has to be decrypted and reassembled from three messages for
+    // the ping behind it to be understood.
+    peer.send(&Frame::new(FrameType::Layout, vec![7; 150_000]));
+    peer.send(&Frame::new(FrameType::Ping, 42u64.to_be_bytes().to_vec()));
+    let pong = peer.next_frame().expect("the pong behind the big frame");
+    assert_eq!(pong.frame_type, FrameType::Pong);
+    assert_eq!(pong.payload, 42u64.to_be_bytes().to_vec());
+}
+
+#[test]
+fn a_client_recognises_a_receiver_from_before_the_encrypted_link() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            // The old receiver speaks first: a hello frame with a challenge.
+            let _ = stream.write_all(&encode_frame(&HelloMessage::new("old").to_frame()).unwrap());
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
+    let error = connect(port, TOKEN, "cli").err().expect("must fail");
+    match error {
+        LinkError::Protocol(message) => assert!(message.contains("older"), "{message}"),
+        other => panic!("unexpected {other:?}"),
+    }
 }
 
 #[test]
 fn drops_a_peer_that_breaks_the_framing_and_then_serves_the_next_one() {
     let (server, recorder) = start_server(Duration::from_secs(5));
-    let mut stream = raw_authenticated(server.port());
+    let mut peer = raw_authenticated(server.port());
     wait_until("raw peer connected", || {
         recorder.connected.lock().unwrap().len() == 1
     });
-    stream
-        .write_all(&[0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0])
-        .unwrap(); // bad magic
+    // A well-encrypted message whose plaintext breaks the framing (bad magic).
+    let sealed = peer
+        .sealer
+        .seal(&[0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0])
+        .unwrap();
+    peer.send_raw(&sealed);
     wait_until("disconnect reported", || {
         recorder.disconnects.load(Ordering::SeqCst) == 1
     });
@@ -382,14 +501,10 @@ fn drops_a_peer_that_breaks_the_framing_and_then_serves_the_next_one() {
 #[test]
 fn ignores_a_malformed_input_record_but_keeps_the_connection() {
     let (server, recorder) = start_server(Duration::from_secs(5));
-    let mut stream = raw_authenticated(server.port());
-    stream
-        .write_all(&encode_frame(&Frame::new(FrameType::Input, vec![99; 16])).unwrap())
-        .unwrap(); // unknown kind
+    let mut peer = raw_authenticated(server.port());
+    peer.send(&Frame::new(FrameType::Input, vec![99; 16])); // unknown kind
     let good = InputEvent::MouseMoveDelta { dx: 5, dy: 6 };
-    stream
-        .write_all(&encode_frame(&Frame::new(FrameType::Input, good.encode().to_vec())).unwrap())
-        .unwrap();
+    peer.send(&Frame::new(FrameType::Input, good.encode().to_vec()));
     wait_until("the valid record after the bad one", || {
         recorder.inputs.lock().unwrap().len() == 1
     });

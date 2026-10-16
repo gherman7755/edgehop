@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use edgehop_proto::{encode_frame, Frame, FrameDecoder, FrameError};
+use edgehop_proto::{encode_frame, Frame, FrameDecoder, FrameError, Opener, Sealer};
 
 /// Locks a mutex, ignoring poisoning: the data is plain state and the caller is shutting a connection down.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -20,22 +20,30 @@ pub(crate) fn now_millis() -> u64 {
     u64::try_from(START.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Serialises writes from several threads onto one socket.
+/// Serialises writes from several threads onto one socket, encrypting each frame on the way (the handshake has
+/// already happened).
 pub(crate) struct FrameWriter {
     stream: Mutex<TcpStream>,
+    sealer: Mutex<Sealer>,
 }
 
 impl FrameWriter {
-    pub(crate) fn new(stream: TcpStream) -> Self {
+    pub(crate) fn new(stream: TcpStream, sealer: Sealer) -> Self {
         Self {
             stream: Mutex::new(stream),
+            sealer: Mutex::new(sealer),
         }
     }
 
     pub(crate) fn send(&self, frame: &Frame) -> io::Result<()> {
         let bytes =
             encode_frame(frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        lock(&self.stream).write_all(&bytes)
+        // The stream lock is held while sealing, so the order on the wire is the order of the nonces.
+        let mut stream = lock(&self.stream);
+        let sealed = lock(&self.sealer)
+            .seal(&bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        stream.write_all(&sealed)
     }
 
     pub(crate) fn shutdown(&self) {
@@ -55,18 +63,23 @@ pub(crate) enum ReadError {
     Io(io::Error),
     /// The peer broke the framing: the connection must be dropped.
     Frame(FrameError),
+    /// A message did not verify (damaged, replayed or forged): the connection must be dropped.
+    Crypto,
 }
 
 pub(crate) struct FrameReader {
     stream: TcpStream,
+    opener: Opener,
     decoder: FrameDecoder,
     queue: VecDeque<Frame>,
 }
 
 impl FrameReader {
-    pub(crate) fn new(stream: TcpStream) -> Self {
+    /// `opener` may already hold bytes that arrived behind the last handshake message.
+    pub(crate) fn new(stream: TcpStream, opener: Opener) -> Self {
         Self {
             stream,
+            opener,
             decoder: FrameDecoder::new(),
             queue: VecDeque::new(),
         }
@@ -98,6 +111,13 @@ impl FrameReader {
             if let Some(frame) = self.queue.pop_front() {
                 return Ok(frame);
             }
+            // Bytes the handshake read ahead are decrypted before anything new is read.
+            let ahead = self.opener.open(&[]).map_err(|_| ReadError::Crypto)?;
+            if !ahead.is_empty() {
+                self.queue
+                    .extend(self.decoder.feed(&ahead).map_err(ReadError::Frame)?);
+                continue;
+            }
             let timeout = match deadline {
                 None => None,
                 Some(deadline) => {
@@ -113,9 +133,14 @@ impl FrameReader {
                 .map_err(ReadError::Io)?;
             match self.stream.read(&mut buffer) {
                 Ok(0) => return Err(ReadError::Closed),
-                Ok(n) => self
-                    .queue
-                    .extend(self.decoder.feed(&buffer[..n]).map_err(ReadError::Frame)?),
+                Ok(n) => {
+                    let plaintext = self
+                        .opener
+                        .open(&buffer[..n])
+                        .map_err(|_| ReadError::Crypto)?;
+                    self.queue
+                        .extend(self.decoder.feed(&plaintext).map_err(ReadError::Frame)?);
+                }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 // Unix reports an expired read timeout as WouldBlock, Windows as TimedOut.
                 Err(e)
