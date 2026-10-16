@@ -827,6 +827,14 @@ fn debug_logs_show_where_the_local_cursor_really_is_while_remote() {
         .unwrap()
         .clone()
         .expect("capture started");
+    capture.sink.event(InputEvent::MouseButton {
+        button: MouseButton::Right,
+        is_down: true,
+    });
+    capture.sink.event(InputEvent::MouseButton {
+        button: MouseButton::Right,
+        is_down: false,
+    });
     right_edge_push(&capture);
     capture.sink.motion((410.0, 300.0), (10.0, 0.0));
 
@@ -843,6 +851,12 @@ fn debug_logs_show_where_the_local_cursor_really_is_while_remote() {
             .any(|l| l.contains("-> REMOTE (receiver-pc); local cursor now at (400, 300)")),
         "{lines:?}"
     );
+    for expected in [
+        "button Right down while Local",
+        "button Right up while Local",
+    ] {
+        assert!(lines.iter().any(|l| l == expected), "{lines:?}");
+    }
     assert!(
         lines.iter().any(|l| l.starts_with(
             "motion #2 pos=(410, 300) delta=(10, 0) local cursor=(400, 300) slowest="
