@@ -25,8 +25,9 @@ pids+=($!)
 for _ in $(seq 1 50); do grep -q "Listening on port" "$work/swift-serve.log" 2>/dev/null && break; sleep 0.2; done
 rust/target/debug/examples/probe 127.0.0.1 "$SWIFT_PORT" "$TOKEN" | tee "$work/probe.out"
 grep -q "probe ok" "$work/probe.out"
+grep -q "keymap hid" "$work/probe.out" || { echo "the Swift receiver did not announce HID key codes"; exit 1; }
 sleep 0.5
-grep -q "peer connected: rust-probe" "$work/swift-serve.log" || { echo "Swift receiver never saw the Rust peer"; cat "$work/swift-serve.log"; exit 1; }
+grep -q "peer connected: rust-probe, keymap hid" "$work/swift-serve.log" || { echo "Swift receiver never saw the Rust peer"; cat "$work/swift-serve.log"; exit 1; }
 
 echo "== 1b. a wrong token is rejected by the Swift receiver =="
 if rust/target/debug/examples/probe 127.0.0.1 "$SWIFT_PORT" "WRONGTOKENWRONGTOKEN" 2> "$work/wrong.err"; then
@@ -43,7 +44,7 @@ for _ in $(seq 1 50); do grep -q "listening on" "$work/rust-serve.log" 2>/dev/nu
 EDGEHOP_TOKEN="$TOKEN" .build/debug/edgehop-link connect 127.0.0.1 --port "$RUST_PORT" --seconds 3 > "$work/swift-connect.log" 2>&1 || true
 sleep 0.5
 cat "$work/swift-connect.log" | head -3
-grep -q "peer connected: " "$work/rust-serve.log" || { echo "Rust receiver never saw the Swift peer"; cat "$work/rust-serve.log"; exit 1; }
+grep -q "peer connected: .*keymap hid" "$work/rust-serve.log" || { echo "Rust receiver never saw the Swift peer"; cat "$work/rust-serve.log"; exit 1; }
 grep "peer connected" "$work/rust-serve.log"
 
 echo

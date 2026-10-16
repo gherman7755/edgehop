@@ -36,7 +36,9 @@ public final class EventInjector {
         case let .mouseMoveDelta(dx, dy): moveRelative(dx: Double(dx), dy: Double(dy))
         case let .mouseButton(button, isDown): postButton(button, isDown: isDown)
         case let .scroll(h, v): postScroll(horizontal: h, vertical: v)
-        case let .key(code, isDown, modifiers): postKey(code: code, isDown: isDown, modifiers: modifiers)
+        case let .key(code, isDown, modifiers):
+            // The wire carries HID usages; macOS wants its own virtual keycodes.
+            if let mac = Keymap.mac(forHID: code) { postKey(code: mac, isDown: isDown, modifiers: modifiers) }
         }
     }
 
