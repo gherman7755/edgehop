@@ -111,6 +111,11 @@ try {
 		const port = receiver.result?.port;
 		check(Number.isInteger(port) && port > 0, 'receiver.start on a free port', JSON.stringify(receiver));
 		check(await until(() => seen('receiver.state', d => d.state === 'listening' && d.port === port), 2000), 'event: receiver.state listening');
+		// Discovery: looking can be switched on and off (what it finds depends on the network); the receiver says
+		// whether it could announce itself, which also depends on the network, so only that it said so is checked.
+		const watching = await request('peers.watch', { enabled: true });
+		check(watching.result !== undefined && !watching.error, 'peers.watch accepted', JSON.stringify(watching));
+		check(events.slice(mark).some(e => e.event === 'log' && e.data.source === 'receiver' && /network/.test(e.data.line)), 'receiver says whether it was announced on the network');
 		const start = await request('controller.start', { token: token.result.token, host: '127.0.0.1', port, switching: true });
 		check(start.result !== undefined && !start.error, 'controller.start to the local receiver', JSON.stringify(start));
 		check(await until(() => seen('controller.state', d => d.state === 'connected' && d.remoteActive === false), 5000), 'event: controller.state connected', JSON.stringify(events.slice(mark)));
@@ -121,6 +126,7 @@ try {
 		check(await until(() => events.slice(mark).filter(e => e.event === 'receiver.state').at(-1)?.data.state === 'listening', 2000), 'receiver listens again after the controller left');
 		await request('receiver.stop');
 		check((await request('receiver.state')).result?.state === 'stopped', 'receiver stopped');
+		check((await request('peers.watch', { enabled: false })).error === undefined, 'peers.watch can be switched off');
 	}
 
 	const shutdown = await request('core.shutdown');

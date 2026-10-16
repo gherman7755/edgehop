@@ -118,6 +118,7 @@ dependencies = [
 name = "edgehop-win"
 version = "0.1.0"
 dependencies = [
+ "edgehop-discovery",
  "edgehop-input",
  "edgehop-proto",
  "windows-sys",

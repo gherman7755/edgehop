@@ -169,8 +169,9 @@ Everything is unencrypted: do it on a trusted network, with keys off.
    Windows input layer (injection verified on a real Windows runner); edge-switching controller ported to Rust and
    proven identical to the Swift one on recorded scenarios. Session backend joining them (`SessionBackend`, tested end to end
    over loopback with fakes) and its Windows platform adapter. Next: confirm it on two real computers. Keyboard sharing
-   (neutral key map, Windows capture and injection, panic chord) is implemented; still missing in the Rust core:
-   discovery and encryption.
+   (neutral key map, Windows capture and injection, panic chord) is implemented, and computers on the network are found
+   by name through `edgehop-discovery` (mDNS, interoperating with the Swift core's Bonjour). Still missing in the Rust
+   core: encryption.
 7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
    Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
 8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.

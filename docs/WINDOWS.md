@@ -54,10 +54,8 @@ What exists for Windows, how it is tested, and what is still missing. The Window
 * **Layout keys.** JIS-only keys (Eisu, Kana, Yen, underscore), media keys and Pause are not in `keymap.csv` yet.
 * **Horizontal scroll sign.** Windows `WM_MOUSEHWHEEL` is positive to the right; the sign macOS puts on the wire
   has not been checked against real devices.
-* **Discovery.** The Rust core has no mDNS yet: a controller connects by address (`host`), not by computer
-  name.
-* **Not yet verified on real hardware:** the keyboard on a real Windows keyboard (below). Unit tests and CI cover
-  the logic and the hook's installation, not the feel.
+* **Not yet verified on real hardware:** the keyboard on a real Windows keyboard (below) and discovery between a PC
+  and a Mac. Unit tests and CI cover the logic and the hook's installation, not the feel.
 
 ## Sessions and the pinned cursor
 
@@ -105,3 +103,19 @@ systems do not have to match. On Windows:
   computer and still down when control returns is hidden here until it is released. Same rules in Swift and Rust,
   checked by the recorded scenarios.
 * Keys only flow if both computers announce `keymap: "hid"`.
+
+## Discovery
+
+A listening receiver announces itself as `_edgehop._tcp` and a controller lists the computers that do, so nobody
+has to type addresses (`edgehop-discovery`, built on `mdns-sd`; the Swift core uses Bonjour with the same service
+type and plain computer names, so Macs and Windows PCs find each other).
+
+* Announcing starts with `receiver.start` and ends with `receiver.stop`; looking only starts after
+  `peers.watch {enabled: true}` and ends with `{enabled: false}`.
+* A computer found by name may have several addresses (Wi-Fi, Ethernet, VPN): LAN addresses are tried first,
+  loopback last, IPv6 link-local ones are dropped, and the first that answers wins. A wrong token or a computer that
+  is not EdgeHop stops the attempts at once.
+* mDNS is multicast UDP on port 5353. Windows Firewall asks about `edgehop-core.exe` the first time (allow it on
+  private networks); some routers and guest Wi-Fi block multicast, in which case connect by address.
+* `scripts/check-discovery-interop.sh` checks it between the real Swift and Rust cores on one machine (not in
+  CI, which has no usable multicast). `cargo test -p edgehop-discovery -- --ignored` runs the Rust side alone.
