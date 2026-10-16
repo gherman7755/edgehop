@@ -44,7 +44,11 @@ fn main() {
         }
     };
     let monitors = hello.monitors.as_ref().map_or(0, Vec::len);
-    println!("connected to {:?} ({monitors} monitor(s))", hello.name);
+    println!(
+        "connected to {:?} ({monitors} monitor(s)), keymap {}",
+        hello.name,
+        hello.keymap.as_deref().unwrap_or("none")
+    );
 
     for _ in 0..3 {
         client.send_ping().expect("ping");

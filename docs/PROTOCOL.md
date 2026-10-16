@@ -31,6 +31,11 @@ Bad magic / unknown type / oversize length: drop the connection.
 `monitors` = `[{"id":"d123","x":0,"y":0,"width":1512,"height":982}, ...]` in global points, the primary display
 at (0,0). The controller uses the monitor at (0,0) as the remote screen size.
 
+`keymap` (optional string, in every hello a computer sends): `"hid"` means it sends and understands HID key codes
+(see "Key codes" below). A computer that does not announce it uses macOS virtual keycodes, which nothing else can
+read: keys must not be sent to it, and its keys must be dropped. Mouse and scroll work either way. Unknown fields
+are ignored, so older computers are unaffected.
+
 ## Input frames (type 3), fixed 16-byte records
 | Offset | Meaning |
 |---|---|
@@ -44,8 +49,13 @@ at (0,0). The controller uses the monitor at (0,0) as the remote screen size.
 
 * Coordinates are in the **receiver's** global points (origin top-left of the primary display).
 * Scroll values are 1/120 of a wheel notch (Windows `WHEEL_DELTA` units); positive vertical = scroll up.
-* **Key codes are currently macOS virtual keycodes.** A Windows agent needs a translation table; the neutral
-  keymap is milestone M7. Until then a Windows agent should support mouse and scroll only.
+* **Key codes** (kind 4) are USB HID usages of the physical key, keyboard page 0x07 (`0x04` = A ... `0x28` = Enter,
+  `0xE0`..`0xE7` = the modifier keys), as announced by `keymap: "hid"`. They name the key's position, not the
+  character, so the receiver's own layout decides what is typed. Each side translates between HID and its own codes
+  at its edge (macOS virtual keycodes, Windows scan codes) with the table in [`keymap.csv`](keymap.csv), which both
+  implementations are tested against. Keys one side has no name for (the Mac Fn key, PrintScreen on a Mac) are
+  dropped by it. Modifier keys are ordinary key events; `aux` carries the modifier state when the key was pressed.
+  Key repeat is repeated down events.
 * The receiver tags every event it injects (macOS: `kCGEventSourceUserData = 0x45484F50`) and ignores its
   own tag when capturing, to avoid feedback loops. A Windows agent can use `dwExtraInfo` for the same purpose.
 
@@ -60,4 +70,4 @@ same payload. Every 2 s.
 * Absolute moves: large jumps (> 150 px) warp the cursor; small ones become relative moves.
 * Relative moves start from the real cursor position if the receiver has none yet (or after 0.5 s idle).
 * On disconnect: release everything that was pressed.
-* Panic chord Ctrl+Option+Cmd+Esc (macOS keycode 53) stops sharing on either computer.
+* Panic chord Ctrl+Option+Cmd/Win+Esc stops sharing on either computer (Escape is HID `0x29`).

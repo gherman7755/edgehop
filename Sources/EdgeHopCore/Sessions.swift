@@ -47,6 +47,8 @@ public final class ReceiverSession {
     private var panicTap: EventTap?
     private let injector = EventInjector() // only touched on the server's queue (and after it stopped)
     private var received = 0
+    /// The connected controller announced HID key codes (an older one sends macOS keycodes we cannot read).
+    private var peerSpeaksHIDKeys = false
 
     public init(token: String, name: String = Device.name, allowKeys: Bool = false, debug: Bool = false) {
         self.token = token
@@ -78,7 +80,11 @@ public final class ReceiverSession {
         server.onPeerConnected = { [weak self] hello in
             guard let self else { return }
             self.received = 0
-            self.log("peer connected: \(hello.name)")
+            self.peerSpeaksHIDKeys = hello.speaksHIDKeys
+            self.log("peer connected: \(hello.name), keymap \(hello.keymap ?? "none")")
+            if self.allowKeys, !hello.speaksHIDKeys {
+                self.log("this peer does not announce the shared key codes (update EdgeHop there): its keys are dropped")
+            }
             self.set(.connected(peer: hello.name))
         }
         server.onPeerDisconnected = { [weak self] in
@@ -117,7 +123,7 @@ public final class ReceiverSession {
 
     private func apply(_ event: InputEvent) {
         received += 1
-        if case .key = event, !allowKeys { return }
+        if case .key = event, !(allowKeys && peerSpeaksHIDKeys) { return }
         injector.inject(event)
         if debug, received <= 8 || received % 100 == 0 {
             let at = CGEvent(source: nil)?.location ?? .zero
@@ -247,6 +253,12 @@ public final class ControllerSession {
         }
         client.onPong = { [weak self] rtt in self?.onLatency?(rtt) }
 
+        // Keys only go to a computer that reads them the same way.
+        let forwardKeys = config.forwardKeys && hello.speaksHIDKeys
+        if config.forwardKeys, !forwardKeys {
+            log("the other computer does not announce the shared key codes (update EdgeHop there): the keyboard is not shared")
+        }
+
         var controller: SwitchController?
         let tap = EventTap()
         var motionLogs = 0
@@ -266,7 +278,7 @@ public final class ControllerSession {
             let sessionController = SwitchController(
                 displays: displays, side: config.side,
                 remoteWidth: remote.width, remoteHeight: remote.height,
-                forwardKeys: config.forwardKeys,
+                forwardKeys: forwardKeys,
                 actions: SwitchController.Actions(
                     send: { [weak self] event in
                         client.send(event)
@@ -306,7 +318,6 @@ public final class ControllerSession {
             tap.reportsDeltas = { true } // mirror mode: relative motion, screens may differ in size
         }
 
-        let forwardKeys = config.forwardKeys
         tap.onEvent = { [weak self] event in
             if PanicChord.isPanic(event) {
                 self?.log("panic chord: stopping")

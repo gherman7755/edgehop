@@ -463,6 +463,15 @@ fn run<P: Platform>(
         return Ok(());
     }
     let monitors = hello.monitors.clone().unwrap_or_default();
+    // Keys only go to a computer that reads them the same way.
+    let forward_keys = config.forward_keys && hello.speaks_hid_keys();
+    if config.forward_keys && !forward_keys {
+        log(
+            events,
+            Source::Controller,
+            "the other computer does not announce the shared key codes (update EdgeHop there): the keyboard is not shared",
+        );
+    }
     log(
         events,
         Source::Controller,
@@ -510,7 +519,7 @@ fn run<P: Platform>(
             config.side,
             remote.width,
             remote.height,
-            config.forward_keys,
+            forward_keys,
             SessionActions {
                 client: Arc::clone(&client),
                 capture: Arc::clone(&capture_slot),
@@ -528,7 +537,7 @@ fn run<P: Platform>(
     let sink = Arc::new(Sink {
         controller: controller.clone(),
         client: Arc::clone(&client),
-        forward_keys: config.forward_keys,
+        forward_keys,
         last_position: Mutex::new(None),
         diagnostics: config.debug.then(|| Diagnostics {
             events: events.clone(),

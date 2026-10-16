@@ -38,6 +38,24 @@ private final class Box<T> {
         #expect(received.current == sent)
     }
 
+    @Test func bothSidesLearnThatTheOtherSpeaksHIDKeyCodes() throws {
+        let server = LinkServer(token: "loopback-secret-3", name: "srv")
+        let peerKeymap = Box<String?>(nil)
+        let connected = DispatchSemaphore(value: 0)
+        server.onPeerConnected = { hello in
+            peerKeymap.mutate { $0 = hello.keymap }
+            connected.signal()
+        }
+        try server.start(port: 0)
+        defer { server.stop() }
+        let client = LinkClient(token: "loopback-secret-3", name: "cli")
+        let hello = try client.connect(host: "127.0.0.1", port: server.port)
+        defer { client.close() }
+        #expect(hello.speaksHIDKeys)
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+        #expect(peerKeymap.current == "hid")
+    }
+
     @Test func rejectsAWrongToken() throws {
         let server = LinkServer(token: "the-real-token-1", name: "srv")
         let got = Box(0)
@@ -109,10 +127,11 @@ private final class Box<T> {
 
     @Test func panicChordNeedsAllThreeModifiersAndEscapeDown() {
         let all: Modifiers = [.control, .option, .command]
-        #expect(PanicChord.isPanic(.key(code: 53, isDown: true, modifiers: all)))
-        #expect(!PanicChord.isPanic(.key(code: 53, isDown: false, modifiers: all)))
-        #expect(!PanicChord.isPanic(.key(code: 53, isDown: true, modifiers: [.control, .option])))
-        #expect(!PanicChord.isPanic(.key(code: 12, isDown: true, modifiers: all)))
+        let escape = Keymap.hidEscape // key events carry HID usages
+        #expect(PanicChord.isPanic(.key(code: escape, isDown: true, modifiers: all)))
+        #expect(!PanicChord.isPanic(.key(code: escape, isDown: false, modifiers: all)))
+        #expect(!PanicChord.isPanic(.key(code: escape, isDown: true, modifiers: [.control, .option])))
+        #expect(!PanicChord.isPanic(.key(code: 0x14, isDown: true, modifiers: all))) // Q
         #expect(!PanicChord.isPanic(.mouseButton(.left, isDown: true)))
     }
 }

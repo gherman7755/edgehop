@@ -149,12 +149,13 @@ public final class EventTap {
             let h = event.getIntegerValueField(.scrollWheelEventDeltaAxis2)
             return .scroll(horizontal: Int32(truncatingIfNeeded: h * 120), vertical: Int32(truncatingIfNeeded: v * 120))
         case .keyDown, .keyUp:
-            let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+            let mac = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+            guard let code = Keymap.hid(forMac: mac) else { return nil } // a key the other side has no name for (Fn)
             return .key(code: code, isDown: type == .keyDown, modifiers: Modifiers(event.flags))
         case .flagsChanged:
             // Modifiers are tracked from flagsChanged: the keycode says which key, the flag says up/down.
-            let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
-            guard let flag = Modifiers.flag(forKeyCode: code) else { return nil }
+            let mac = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+            guard let flag = Modifiers.flag(forKeyCode: mac), let code = Keymap.hid(forMac: mac) else { return nil }
             return .key(code: code, isDown: event.flags.contains(flag), modifiers: Modifiers(event.flags))
         default:
             return nil

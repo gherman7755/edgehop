@@ -14,10 +14,15 @@ public struct HelloMessage: Codable, Equatable, Sendable {
     public var proof: String?
     public var accepted: Bool?
     public var monitors: [MonitorInfo]?
+    /// `"hid"` if the sender sends and understands HID key codes (`Keymap`). Absent: macOS keycodes, so no keys.
+    public var keymap: String?
+
+    /// True if the sender announced HID key codes.
+    public var speaksHIDKeys: Bool { keymap == Keymap.name }
 
     public init(
         version: Int = 1, name: String, nonce: String? = nil, proof: String? = nil,
-        accepted: Bool? = nil, monitors: [MonitorInfo]? = nil
+        accepted: Bool? = nil, monitors: [MonitorInfo]? = nil, keymap: String? = nil
     ) {
         self.version = version
         self.name = name
@@ -25,6 +30,7 @@ public struct HelloMessage: Codable, Equatable, Sendable {
         self.proof = proof
         self.accepted = accepted
         self.monitors = monitors
+        self.keymap = keymap
     }
 }
 
@@ -65,7 +71,7 @@ public enum LinkAuth {
 
 /// The panic chord stops forwarding on either machine: Ctrl + Option + Cmd + Esc.
 public enum PanicChord {
-    public static let escapeKeyCode: UInt16 = 53
+    public static let escapeKeyCode: UInt16 = Keymap.hidEscape // events carry HID key codes
 
     public static func isPanic(_ event: InputEvent) -> Bool {
         guard case let .key(code, isDown, modifiers) = event else { return false }
@@ -220,7 +226,7 @@ public final class LinkServer {
         var authenticated = false
 
         conn.onReady = { [weak conn, name] in
-            conn?.send(encode(HelloMessage(name: name, nonce: nonce.base64EncodedString())))
+            conn?.send(encode(HelloMessage(name: name, nonce: nonce.base64EncodedString(), keymap: Keymap.name)))
         }
         conn.onFrame = { [weak self, weak conn] frame in
             guard let self, let conn else { return }
@@ -233,7 +239,7 @@ public final class LinkServer {
                     return
                 }
                 authenticated = true
-                conn.send(encode(HelloMessage(name: self.name, accepted: true, monitors: LocalDisplays.list())))
+                conn.send(encode(HelloMessage(name: self.name, accepted: true, monitors: LocalDisplays.list(), keymap: Keymap.name)))
                 self.onPeerConnected?(hello)
                 return
             }
@@ -309,7 +315,7 @@ public final class LinkClient {
                 else { return finish(.failure(.protocolError("expected challenge"))) }
                 let proof = LinkAuth.proof(token: self.token, nonce: nonce).base64EncodedString()
                 phase = 1
-                conn.send(encode(HelloMessage(name: self.name, proof: proof, monitors: LocalDisplays.list())))
+                conn.send(encode(HelloMessage(name: self.name, proof: proof, monitors: LocalDisplays.list(), keymap: Keymap.name)))
             case 1:
                 guard let hello = decodeHello(frame), let accepted = hello.accepted
                 else { return finish(.failure(.protocolError("expected accept"))) }
