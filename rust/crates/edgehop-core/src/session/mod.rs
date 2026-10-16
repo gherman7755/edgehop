@@ -2,6 +2,7 @@
 //! switching on top of a [`Platform`]. Everything here is platform-independent and tested with fakes.
 
 mod controller;
+mod peers;
 mod receiver;
 #[cfg(test)]
 mod tests;
@@ -16,6 +17,7 @@ use crate::backend::{
 };
 
 use controller::ControllerSessions;
+use peers::Peers;
 use receiver::ReceiverSessions;
 
 /// A value that announces each change exactly once, in order.
@@ -52,10 +54,11 @@ pub(crate) fn log(events: &Events, source: Source, line: impl AsRef<str>) {
     events.log(source, line.as_ref());
 }
 
-/// [`Backend`] for any [`Platform`]: runs a receiver and a controller session. Discovery is not available yet,
-/// so computers are reached by address.
+/// [`Backend`] for any [`Platform`]: runs a receiver and a controller session. Computers are reached by name when
+/// the platform can discover them, otherwise by address.
 pub struct SessionBackend<P: Platform> {
     platform: Arc<P>,
+    peers: Arc<Peers>,
     receiver: ReceiverSessions<P>,
     controller: ControllerSessions<P>,
 }
@@ -63,9 +66,11 @@ pub struct SessionBackend<P: Platform> {
 impl<P: Platform> SessionBackend<P> {
     pub fn new(platform: P) -> Self {
         let platform = Arc::new(platform);
+        let peers = Arc::new(Peers::new(platform.discovery(), platform.device_name()));
         Self {
             receiver: ReceiverSessions::new(Arc::clone(&platform)),
-            controller: ControllerSessions::new(Arc::clone(&platform)),
+            controller: ControllerSessions::new(Arc::clone(&platform), Arc::clone(&peers)),
+            peers,
             platform,
         }
     }
@@ -90,10 +95,12 @@ impl<P: Platform> Backend for SessionBackend<P> {
 
     fn request_permission(&self, _kind: PermissionKind) {}
 
-    fn watch_peers(&self, _enabled: bool, _events: Events) {}
+    fn watch_peers(&self, enabled: bool, events: Events) {
+        self.peers.watch(enabled, events);
+    }
 
     fn peers(&self) -> Vec<String> {
-        Vec::new()
+        self.peers.names()
     }
 
     fn controller_state(&self) -> ControllerState {
@@ -127,5 +134,6 @@ impl<P: Platform> Backend for SessionBackend<P> {
     fn shutdown(&self) {
         self.controller.stop();
         self.receiver.stop();
+        self.peers.stop();
     }
 }
