@@ -28,6 +28,10 @@ pub struct HelloMessage {
     pub accepted: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub monitors: Option<Vec<MonitorInfo>>,
+    /// `"hid"` if this computer sends and understands HID key codes (`keymap.rs`). Absent: macOS keycodes, so
+    /// no keys can be exchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keymap: Option<String>,
 }
 
 impl HelloMessage {
@@ -39,7 +43,19 @@ impl HelloMessage {
             proof: None,
             accepted: None,
             monitors: None,
+            keymap: None,
         }
+    }
+
+    /// Announces HID key codes.
+    pub fn with_keymap(mut self) -> Self {
+        self.keymap = Some(crate::KEYMAP_NAME.to_string());
+        self
+    }
+
+    /// True if the sender announced HID key codes.
+    pub fn speaks_hid_keys(&self) -> bool {
+        self.keymap.as_deref() == Some(crate::KEYMAP_NAME)
     }
 
     pub fn to_frame(&self) -> Frame {
