@@ -33,6 +33,8 @@ pub struct ClientConfig {
     pub monitors: Vec<MonitorInfo>,
     /// Limit for reaching the receiver and for the whole handshake.
     pub timeout: Duration,
+    /// Announce HID key codes in the handshake (`false` only to play an older computer in tests).
+    pub announce_keymap: bool,
 }
 
 impl ClientConfig {
@@ -42,6 +44,7 @@ impl ClientConfig {
             name: name.into(),
             monitors: Vec::new(),
             timeout: Duration::from_secs(8),
+            announce_keymap: true,
         }
     }
 }
@@ -79,6 +82,9 @@ impl LinkClient {
         // 2. our proof
         let writer = Arc::new(FrameWriter::new(write_half));
         let mut answer = HelloMessage::new(config.name.clone());
+        if config.announce_keymap {
+            answer = answer.with_keymap();
+        }
         answer.proof = Some(STANDARD.encode(proof(&config.token, &nonce)));
         answer.monitors = Some(config.monitors.clone());
         writer

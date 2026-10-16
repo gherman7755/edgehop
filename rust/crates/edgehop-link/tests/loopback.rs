@@ -22,6 +22,7 @@ const TOKEN: &str = "loopback-secret-1";
 #[derive(Default)]
 struct Recorder {
     connected: Mutex<Vec<String>>,
+    peer_keymaps: Mutex<Vec<Option<String>>>,
     inputs: Mutex<Vec<InputEvent>>,
     controls: Mutex<Vec<ControlMessage>>,
     disconnects: AtomicUsize,
@@ -30,6 +31,7 @@ struct Recorder {
 impl ServerHandler for Recorder {
     fn on_peer_connected(&self, hello: &HelloMessage) {
         self.connected.lock().unwrap().push(hello.name.clone());
+        self.peer_keymaps.lock().unwrap().push(hello.keymap.clone());
     }
     fn on_input(&self, event: InputEvent) {
         self.inputs.lock().unwrap().push(event);
@@ -186,6 +188,39 @@ fn rejects_a_wrong_token_and_delivers_nothing() {
     );
     // The server is still usable.
     assert!(connect(server.port(), TOKEN, "cli").is_ok());
+}
+
+#[test]
+fn both_sides_learn_whether_the_other_speaks_hid_key_codes() {
+    let (server, recorder) = start_server(Duration::from_secs(5));
+    let (_client, hello, _) = connect(server.port(), TOKEN, "cli").unwrap();
+    assert!(hello.speaks_hid_keys(), "the receiver announces it");
+    wait_until("the receiver to see the controller", || {
+        !recorder.peer_keymaps.lock().unwrap().is_empty()
+    });
+    assert_eq!(
+        recorder.peer_keymaps.lock().unwrap()[0].as_deref(),
+        Some("hid"),
+        "the controller announces it"
+    );
+}
+
+#[test]
+fn an_older_peer_that_announces_nothing_is_recognised() {
+    let (server, recorder) = start_server(Duration::from_secs(5));
+    let mut config = ClientConfig::new(TOKEN, "old");
+    config.announce_keymap = false;
+    let (_client, _) = LinkClient::connect(
+        "127.0.0.1",
+        server.port(),
+        &config,
+        Arc::new(ClientRecorder::default()),
+    )
+    .unwrap();
+    wait_until("the receiver to see the controller", || {
+        !recorder.peer_keymaps.lock().unwrap().is_empty()
+    });
+    assert_eq!(recorder.peer_keymaps.lock().unwrap()[0], None);
 }
 
 /// A refused or finished peer must free the slot before it is told, or an immediate retry is dropped.

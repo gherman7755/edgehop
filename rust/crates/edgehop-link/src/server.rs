@@ -38,6 +38,8 @@ pub struct ServerConfig {
     pub monitors: Vec<MonitorInfo>,
     /// How long a new connection may take to authenticate before it is dropped.
     pub auth_timeout: Duration,
+    /// Announce HID key codes in the handshake (`false` only to play an older computer in tests).
+    pub announce_keymap: bool,
 }
 
 impl ServerConfig {
@@ -49,6 +51,7 @@ impl ServerConfig {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             monitors: Vec::new(),
             auth_timeout: Duration::from_secs(5),
+            announce_keymap: true,
         }
     }
 }
@@ -189,7 +192,10 @@ fn serve_peer(shared: &Shared, stream: TcpStream, id: u64) {
     let config = &shared.config;
 
     let Ok(nonce) = make_nonce() else { return };
-    let mut challenge = HelloMessage::new(config.name.clone());
+    let mut challenge = announce(
+        HelloMessage::new(config.name.clone()),
+        config.announce_keymap,
+    );
     challenge.nonce = Some(STANDARD.encode(nonce));
     if writer.send(&challenge.to_frame()).is_err() {
         return;
@@ -208,7 +214,10 @@ fn serve_peer(shared: &Shared, stream: TcpStream, id: u64) {
         writer.shutdown();
         return;
     };
-    let mut accepted = HelloMessage::new(config.name.clone());
+    let mut accepted = announce(
+        HelloMessage::new(config.name.clone()),
+        config.announce_keymap,
+    );
     accepted.accepted = Some(true);
     accepted.monitors = Some(config.monitors.clone());
     if writer.send(&accepted.to_frame()).is_err() {
@@ -243,6 +252,14 @@ fn serve_peer(shared: &Shared, stream: TcpStream, id: u64) {
     shared.handler.on_peer_disconnected();
     shared.release(id);
     writer.shutdown();
+}
+
+fn announce(hello: HelloMessage, keymap: bool) -> HelloMessage {
+    if keymap {
+        hello.with_keymap()
+    } else {
+        hello
+    }
 }
 
 /// The controller's hello if it carries a valid proof for `nonce`.

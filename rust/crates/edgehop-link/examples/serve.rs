@@ -22,8 +22,9 @@ impl ServerHandler for Printer {
     fn on_peer_connected(&self, hello: &HelloMessage) {
         let monitors = hello.monitors.as_ref().map_or(0, Vec::len);
         say(&format!(
-            "peer connected: {} ({monitors} monitor(s))",
-            hello.name
+            "peer connected: {} ({monitors} monitor(s)), keymap {}",
+            hello.name,
+            hello.keymap.as_deref().unwrap_or("none")
         ));
     }
     fn on_input(&self, event: InputEvent) {
