@@ -37,7 +37,7 @@ Behaviour worth knowing:
 * Tokens are stored encrypted with the operating system's keychain (Electron `safeStorage`). If that is not
   available they are kept for the run only, and the screens say so.
 * The page has context isolation, a sandbox, a strict content security policy and cannot navigate away.
-* Keyboard sharing switches are disabled for cores that do not have the neutral key map yet (today: Windows).
+* Keyboard sharing switches are disabled for cores that do not have the neutral key map (the macOS and Windows cores both have it).
 
 ## Tests
 

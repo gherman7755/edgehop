@@ -97,7 +97,8 @@ describe('isRunning and connectBlocker', () => {
 describe('keyboardSupported', () => {
 	it('is true only where the core has the key map', () => {
 		expect(keyboardSupported('macos')).toBe(true);
-		expect(keyboardSupported('windows')).toBe(false);
+		expect(keyboardSupported('windows')).toBe(true);
+		expect(keyboardSupported('linux')).toBe(false);
 		expect(keyboardSupported(undefined)).toBe(false);
 	});
 });
