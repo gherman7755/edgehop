@@ -38,7 +38,7 @@ export function App() {
 					</>
 				) : null}
 				<LogPanel hop={hop} />
-				<p className="footnote">The link is not encrypted yet: use EdgeHop on a network you trust.</p>
+				<p className="footnote">The link between the computers is encrypted. Anyone who knows the token can connect, so keep it private.</p>
 			</main>
 		</div>
 	);

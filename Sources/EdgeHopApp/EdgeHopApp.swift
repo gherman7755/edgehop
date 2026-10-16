@@ -67,7 +67,7 @@ struct ContentView: View {
             if model.mode == .controller { ControllerPanel() } else { ReceiverPanel() }
 
             logSection
-            Text("Panic chord ⌃⌥⌘⎋ stops sharing on either computer. The link is not encrypted yet: use it on a network you trust.")
+            Text("Panic chord ⌃⌥⌘⎋ stops sharing on either computer. The link is encrypted; anyone who knows the token can connect, so keep it private.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -186,7 +186,7 @@ struct ControllerPanel: View {
                     .pickerStyle(.segmented)
 
                     Toggle("Move the cursor across the screen edge (off: mirror the mouse on both)", isOn: $model.switching)
-                    Toggle("Also share the keyboard (not encrypted yet)", isOn: $model.forwardKeys)
+                    Toggle("Also share the keyboard (everything you type goes to the other computer)", isOn: $model.forwardKeys)
                 }
                 .disabled(model.isRunning) // settings are fixed while connected; Disconnect stays usable
 
@@ -226,7 +226,7 @@ struct ReceiverPanel: View {
                 }
                 Text("This computer appears as “\(Device.name)”.")
                     .font(.caption).foregroundStyle(.secondary)
-                Toggle("Accept keyboard input too (not encrypted yet)", isOn: $model.allowKeys)
+                Toggle("Accept keyboard input too (lets the other computer type here)", isOn: $model.allowKeys)
                     .disabled(model.isRunning)
                 HStack {
                     Spacer()

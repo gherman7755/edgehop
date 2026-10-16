@@ -106,7 +106,7 @@ public final class ReceiverSession {
             log("WARNING: no local panic chord (event tap unavailable: grant Accessibility and Input Monitoring)")
         }
 
-        log("listening on port \(server.port) as \"\(name)\" (keys: \(allowKeys ? "ALLOWED, unencrypted!" : "dropped"))")
+        log("listening on port \(server.port) as \"\(name)\" (keys: \(allowKeys ? "accepted" : "dropped"))")
         set(.listening(port: server.port))
     }
 

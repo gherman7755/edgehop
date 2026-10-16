@@ -190,7 +190,7 @@ impl<P: Platform> ReceiverSessions<P> {
             format!(
                 "listening on port {port} as \"{name}\" (keys: {})",
                 if config.allow_keys {
-                    "ALLOWED, unencrypted!"
+                    "accepted"
                 } else {
                     "dropped"
                 }

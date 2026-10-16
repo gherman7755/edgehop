@@ -23,12 +23,13 @@ On the computer that will be controlled choose **Be controlled** and press **Sta
 - **Windows support**: a Windows PC can control a Mac and be controlled by one, mouse, scroll and (optionally) keyboard.
 - **Keyboard sharing** on both systems with a shared key map, so layouts do not have to match, and without keys sticking when the cursor crosses with a modifier held.
 - Computers on the network are **found by name** on both systems.
+- The link is now **encrypted** (computers running 0.1.0 cannot connect to 0.2.0: update both).
 - Dragging with a button held stays on the computer it started on, and a jitter right after crossing no longer bounces you back.
 - The panic chord now works on Windows too.
 
 ## Known limits
 
-- **Not encrypted.** The connection is authenticated with the shared token (the token itself never crosses the network) but the traffic is not encrypted: use it on a network you trust. Keyboard sharing is therefore **off by default** and has to be enabled on both computers.
+- **Encrypted, but the token is the key.** The connection is encrypted and authenticated (Noise, with the shared token as the pre-shared key), so someone on your network can neither read nor change the traffic, and cannot connect without the token. Anyone who knows the token can connect, so keep it private (the generated 20-character token is strong; a short one you invent is not). Keyboard sharing is still **off by default** and has to be enabled on both computers.
 - **Not signed or notarized**, hence the warnings above. Because the macOS signature is ad-hoc, macOS asks for Accessibility and Input Monitoring again after every reinstall or update.
 - **Panic chord** on either computer: **Ctrl + Option + Cmd + Esc** on a Mac, **Ctrl + Alt + Win + Esc** on Windows; it stops sharing.
 - Intel Macs are not supported by this build. Caps Lock is not shared reliably; JIS-only and media keys are not shared.

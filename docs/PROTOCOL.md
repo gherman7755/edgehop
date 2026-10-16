@@ -1,8 +1,7 @@
-# EdgeHop link protocol (v1, plaintext)
+# EdgeHop link protocol (v2, encrypted)
 
 What another implementation (for example a Windows agent) must speak to join a session.
-**Status: not encrypted.** Authentication only. Noise XX arrives in milestone M6, which will wrap this
-exact framing.
+Everything described below, from the first frame on, travels inside the encrypted channel of "Encryption".
 
 ## Discovery and transport
 * TCP, default port **47474**. The receiver advertises Bonjour service **`_edgehop._tcp`** (name = computer name).
@@ -21,12 +20,42 @@ exact framing.
 
 Bad magic / unknown type / oversize length: drop the connection.
 
-## Handshake (hello frames, JSON UTF-8)
-1. Receiver -> controller: `{"version":1,"name":"<computer>","nonce":"<base64 of 32 random bytes>"}`
-2. Controller -> receiver: `{"version":1,"name":"<computer>","proof":"<base64>","monitors":[...]}`
-   where `proof = HMAC-SHA256(key = UTF-8 token, message = "edgehop-link-v1|" || nonce_bytes)`.
-3. Receiver -> controller: `{"version":1,"name":"<computer>","accepted":true,"monitors":[...]}`
-   or `"accepted":false` and close. Frames other than hello before acceptance close the connection (5 s limit).
+## Encryption
+
+Every connection starts with a Noise handshake, `Noise_XXpsk3_25519_ChaChaPoly_SHA256`, prologue `edgehop/2`
+(the Noise Protocol Framework, revision 34). The pre-shared key is
+`HMAC-SHA256(key = "edgehop-noise-psk-v1", message = UTF-8 token)`, so only computers that know the token get through,
+and every later byte is encrypted and authenticated. Static keys are random per connection (there is no pinning yet;
+the token is what authenticates).
+
+Handshake messages travel with a 2-byte big-endian length in front, controller first:
+
+1. controller -> receiver: `e` (empty payload)
+2. receiver -> controller: `e, ee, s, es` (empty payload)
+3. controller -> receiver: `s, se, psk` with the controller's **hello** (below) as payload
+
+The receiver learns whether the token is right from message 3: a wrong one does not decrypt and the receiver closes the
+connection without a word. It answers with the first encrypted frame, a hello with `"accepted":true`, so the controller
+learns it from that frame arriving (or from the connection closing: the token differs). A receiver gives a connection
+5 s to complete the three messages.
+
+After message 3 the stream of frames ("Frame", below) is cut into chunks of at most 65519 bytes and each chunk is one Noise
+transport message, again with a 2-byte length in front; the nonce is the message counter, and a message that does not
+verify drops the connection. A computer from before the encrypted link (protocol v1) speaks first with a hello frame,
+whose first two bytes are `EH`: where a handshake message length is expected, that is how a v2 controller recognises it
+and reports "update the other computer".
+
+What this protects: eavesdropping, changing or replaying traffic, and connecting without the token (the token is hashed
+into the pre-shared key, so it never crosses the network). Session keys come from fresh ephemeral keys, so a token that
+leaks later does not open recorded traffic. What it does not: anyone who knows the token can connect (or machine-in-the-middle
+a connection that starts after it leaked), and a short, guessable token can be guessed offline from a recorded handshake, so
+use the generated 20-character one.
+
+## Hello (JSON, UTF-8)
+
+The controller's hello (payload of handshake message 3): `{"version":2,"name":"<computer>","monitors":[...],"keymap":"hid"}`.
+The receiver's answer (the first encrypted frame, a `hello` frame): `{"version":2,"name":"<computer>","accepted":true,
+"monitors":[...],"keymap":"hid"}`.
 
 `monitors` = `[{"id":"d123","x":0,"y":0,"width":1512,"height":982}, ...]` in global points, the primary display
 at (0,0). The controller uses the monitor at (0,0) as the remote screen size.

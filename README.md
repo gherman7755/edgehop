@@ -6,8 +6,9 @@ other machine. A from-scratch learning project in Swift (macOS first, Windows pl
 It is an independent implementation. Its design was informed by studying how such tools behave (event
 capture, injection, transport, edge switching); it shares concepts, not code or wire format, with any other app.
 
-**Status:** prototype. The link is authenticated but **not encrypted yet** (see Milestones), so use it on a
-network you trust. No license has been chosen yet (all rights reserved by default).
+**Status:** prototype. The link is encrypted and authenticated (Noise, keyed by a shared token; see
+`docs/PROTOCOL.md`), but the apps are not signed and little of this has been tried on many setups. No license has
+been chosen yet (all rights reserved by default).
 
 ## Layout
 
@@ -142,7 +143,7 @@ through its facing edge to return ("Pop"). Redeploy first: the receiver must kno
 
 Move the mouse on this Mac: the other Mac's cursor should follow (relative motion), clicks and scroll too.
 Panic chord on either Mac: **Ctrl + Option + Cmd + Esc**. Both sides also auto-exit (`--seconds`).
-Everything is unencrypted: do it on a trusted network, with keys off.
+Keys are off unless you enable them on both sides (`--keys` and `--allow-keys`).
 
 ## Milestones
 
@@ -171,10 +172,12 @@ Everything is unencrypted: do it on a trusted network, with keys off.
    over loopback with fakes) and its Windows platform adapter. Next: confirm it on two real computers. Keyboard sharing
    (neutral key map, Windows capture and injection, panic chord) is implemented, and computers on the network are found
    by name through `edgehop-discovery` (mDNS, interoperating with the Swift core's Bonjour). Still missing in the Rust
-   core: encryption.
-7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
-   Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
-8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.
+   core: SAS pairing with pinned keys (the link itself is encrypted).
+7. 🟨 **M6 security:** the link is encrypted: `Noise_XXpsk3_25519_ChaChaPoly_SHA256` with the token as the pre-shared
+   key (`docs/PROTOCOL.md`, "Encryption"); Rust uses the `snow` crate, Swift is written on CryptoKit and checked byte
+   for byte against it (handshake and transport vectors in both directions, and the real links against each other).
+   Not done: pinned static keys with a 6-digit SAS pairing (today the token authenticates).
+8. ✅ **M7 keymap:** neutral key table (USB HID usages) <-> macOS keycodes and Windows scan codes (`docs/keymap.csv`).
 9. ⬜ **M8 polish:** `PeerHello` with monitor geometry, layout sync with a revision, sleep-gap detection,
    reconnect, ping/pong latency, tap re-enable stress test.
 
