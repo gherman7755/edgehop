@@ -13,6 +13,8 @@ use crate::backend::{BackendError, Events, ReceiverConfig, ReceiverState, Source
 struct Handler<P: Platform> {
     injector: Mutex<Injector<P::Output>>,
     allow_keys: bool,
+    /// The connected controller announced HID key codes; an older one sends macOS keycodes we cannot read.
+    peer_speaks_hid: AtomicBool,
     debug: bool,
     received: AtomicUsize,
     /// Set before the server is stopped so the disconnect that follows does not announce "listening" again.
@@ -40,11 +42,20 @@ impl<P: Platform> Handler<P> {
 impl<P: Platform> ServerHandler for Handler<P> {
     fn on_peer_connected(&self, hello: &HelloMessage) {
         self.received.store(0, Ordering::SeqCst);
+        self.peer_speaks_hid
+            .store(hello.speaks_hid_keys(), Ordering::SeqCst);
         log(
             &self.events,
             Source::Receiver,
             format!("peer connected: {}", hello.name),
         );
+        if self.allow_keys && !hello.speaks_hid_keys() {
+            log(
+                &self.events,
+                Source::Receiver,
+                "this peer does not announce the shared key codes (update EdgeHop there): its keys are dropped",
+            );
+        }
         self.set_state(ReceiverState::Connected {
             peer: hello.name.clone(),
         });
@@ -52,7 +63,9 @@ impl<P: Platform> ServerHandler for Handler<P> {
 
     fn on_input(&self, event: InputEvent) {
         let count = self.received.fetch_add(1, Ordering::SeqCst) + 1;
-        if matches!(event, InputEvent::Key { .. }) && !self.allow_keys {
+        if matches!(event, InputEvent::Key { .. })
+            && !(self.allow_keys && self.peer_speaks_hid.load(Ordering::SeqCst))
+        {
             return;
         }
         self.injector
@@ -143,6 +156,7 @@ impl<P: Platform> ReceiverSessions<P> {
         let handler = Arc::new(Handler::<P> {
             injector: Mutex::new(Injector::new(self.platform.output())),
             allow_keys: config.allow_keys,
+            peer_speaks_hid: AtomicBool::new(false),
             debug: config.debug,
             received: AtomicUsize::new(0),
             stopping: AtomicBool::new(false),

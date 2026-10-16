@@ -864,3 +864,147 @@ fn debug_logs_show_where_the_local_cursor_really_is_while_remote() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn keys_from_a_controller_that_does_not_announce_the_key_map_are_dropped() {
+    use edgehop_link::{ClientConfig, ClientHandler, LinkClient};
+    struct Quiet;
+    impl ClientHandler for Quiet {}
+
+    let rig = Rig::new(true); // the receiver accepts keys
+    let mut config = ClientConfig::new(TOKEN, "old controller");
+    config.announce_keymap = false;
+    let (client, _) =
+        LinkClient::connect("127.0.0.1", rig.port, &config, Arc::new(Quiet)).expect("connects");
+    client
+        .send_input(&InputEvent::Key {
+            code: 0, // a macOS keycode: not something to inject on this computer
+            is_down: true,
+            modifiers: Modifiers::NONE,
+        })
+        .unwrap();
+    client
+        .send_input(&InputEvent::Scroll {
+            horizontal: 0,
+            vertical: 7,
+        })
+        .unwrap();
+    rig.wait_for_receiver_op("the scroll", |op| *op == Op::Scroll(0, 7));
+    assert!(!rig
+        .receiver_ops
+        .all()
+        .iter()
+        .any(|op| matches!(op, Op::Key { .. })));
+    let lines: Vec<String> = rig
+        .receiver_events
+        .1
+        .events("log")
+        .iter()
+        .filter_map(|d| d["line"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("does not announce the shared key codes")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_controller_does_not_send_keys_to_a_receiver_that_does_not_announce_the_key_map() {
+    use edgehop_link::{LinkServer, ServerConfig, ServerHandler};
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<InputEvent>>);
+    impl ServerHandler for Recorder {
+        fn on_input(&self, event: InputEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    let recorder = Arc::new(Recorder::default());
+    let mut server_config = ServerConfig::new(TOKEN, "old receiver");
+    server_config.port = 0;
+    server_config.bind = "127.0.0.1".parse().unwrap();
+    server_config.announce_keymap = false;
+    server_config.monitors = vec![MonitorInfo {
+        id: "m0".into(),
+        x: 0.0,
+        y: 0.0,
+        width: 800.0,
+        height: 600.0,
+    }];
+    let server = LinkServer::start(server_config, recorder.clone()).unwrap();
+
+    let platform = FakePlatform::new("controller-pc", 1000.0, 800.0);
+    let capture_slot = Arc::clone(&platform.capture);
+    let backend = SessionBackend::new(platform);
+    let (events, buffer) = events();
+    backend
+        .start_controller(
+            ControllerConfig {
+                target: Target::Host {
+                    host: "127.0.0.1".into(),
+                    port: server.port(),
+                },
+                token: TOKEN.into(),
+                side: Side::Right,
+                switching: true,
+                forward_keys: true,
+                debug: false,
+            },
+            events,
+        )
+        .unwrap();
+    wait_until("the controller to connect", || {
+        matches!(
+            backend.controller_state(),
+            ControllerState::Connected { .. }
+        )
+    });
+    let capture = capture_slot
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("capture started");
+    right_edge_push(&capture);
+    assert!(
+        !capture.sink.should_swallow(&InputEvent::Key {
+            code: 4,
+            is_down: true,
+            modifiers: Modifiers::NONE
+        }),
+        "keys stay local when they are not shared"
+    );
+    capture.sink.event(InputEvent::Key {
+        code: 4,
+        is_down: true,
+        modifiers: Modifiers::NONE,
+    });
+    capture.sink.event(InputEvent::Scroll {
+        horizontal: 0,
+        vertical: 3,
+    });
+    wait_until("the scroll", || {
+        recorder.0.lock().unwrap().contains(&InputEvent::Scroll {
+            horizontal: 0,
+            vertical: 3,
+        })
+    });
+    assert!(!recorder
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|e| matches!(e, InputEvent::Key { .. })));
+    let lines: Vec<String> = buffer
+        .events("log")
+        .iter()
+        .filter_map(|d| d["line"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("the keyboard is not shared")),
+        "{lines:?}"
+    );
+}
