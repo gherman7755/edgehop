@@ -61,6 +61,7 @@ dependencies = [
  "edgehop-link",
  "edgehop-proto",
  "edgehop-switch",
+ "edgehop-win",
  "getrandom",
  "serde_json",
  "thiserror",

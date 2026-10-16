@@ -8,8 +8,8 @@ What exists for Windows, how it is tested, and what is still missing. The Window
 
 | Crate | Role |
 |---|---|
-| `edgehop-input` | Platform-independent injection logic behind a small `OsInput` trait: pointer tracking, small absolute jumps are ordinary moves and large ones warp (threshold 150 px), relative moves start from the real cursor, held buttons block the idle resync so drags do not jump, `release_all`. Same rules as the Swift `EventInjector`. Tested with a fake on any machine. |
-| `edgehop-win` | `list_monitors` (displays, primary first), `WinOutput` (`OsInput` over `SendInput`), `Capture` (low-level mouse hook plus raw input on its own thread). The crate is empty on other platforms. |
+| `edgehop-input` | Also the `Platform` trait the core's sessions run on (displays, an injector, capture) and `MotionMapper`. Platform-independent injection logic behind a small `OsInput` trait: pointer tracking, small absolute jumps are ordinary moves and large ones warp (threshold 150 px), relative moves start from the real cursor, held buttons block the idle resync so drags do not jump, `release_all`. Same rules as the Swift `EventInjector`. Tested with a fake on any machine. |
+| `edgehop-win` | `list_monitors` (displays, primary first), `WinOutput` (`OsInput` over `SendInput`), `Capture` (low-level mouse hook plus raw input on its own thread), `WinPlatform` (all of it as a `Platform`). The crate is empty on other platforms. |
 
 ## Design decisions
 
@@ -52,7 +52,22 @@ What exists for Windows, how it is tested, and what is still missing. The Window
   M7), so `WinOutput` ignores key events and there is no keyboard capture. Windows is mouse and scroll only.
 * **Horizontal scroll sign.** Windows `WM_MOUSEHWHEEL` is positive to the right; the sign macOS puts on the wire
   has not been checked against real devices.
-* **Sessions.** Joining the link (`edgehop-link`), the injector and the capture into receiver and controller
-  sessions behind the core's IPC, including the Rust port of the edge switching, is the next step.
-* **Remote mode on Windows.** While another computer is controlled, the local cursor has to stay put: the plan is
-  to swallow moves in the hook and take the deltas from raw input (`Motion::raw_dx/raw_dy`).
+* **Discovery.** The Rust core has no mDNS yet: a controller connects by address (`host`), not by computer
+  name.
+* **Panic chord.** The Swift core stops a session when Ctrl+Option+Cmd+Esc is typed locally. Windows has no
+  keyboard capture yet, so the way out is the UI's stop button (or closing the UI, which stops everything).
+* **Not yet verified on real hardware:** the pinned cursor in remote mode (below). Unit tests and the loopback
+  CI run cover the logic, not the feel.
+
+## Sessions and the pinned cursor
+
+`SessionBackend<WinPlatform>` (in `edgehop-core`) runs the receiver (`LinkServer` + `Injector`) and the controller
+(`LinkClient` + `SwitchController` + `Capture`); `docs/IPC.md` describes what the UI sees.
+
+While another computer is controlled, the local cursor must not move, but the hook still has to measure the mouse.
+When control leaves, the cursor is parked at the centre of its display, the hook swallows every move, and the
+movement is `pt - centre`: the hook reports where a swallowed move would have gone, and from the centre nothing is
+clamped at a screen edge. Locally the movement is the raw (unaccelerated) device delta, which still changes when the
+cursor is stopped at an edge, so an outward push is recognised. This is `MotionMapper`. On return the cursor is
+warped to the crossing point. The first move or two after parking may be measured against the old position; if that
+shows as a jump on real hardware, it needs a guard.
