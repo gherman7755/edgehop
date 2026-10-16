@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
 import { join } from 'node:path';
 import { ALLOWED_METHODS, type ControllerState, type CoreEvent, type ReceiverState, type Settings } from '../shared/types';
 import { CoreError } from './core/client';
+import { armExitWatchdog } from './exit';
 import { locateCore } from './core/locate';
 import { CoreSupervisor } from './core/supervisor';
 import { localAddresses } from './network';
@@ -46,10 +47,16 @@ let receiverState: ReceiverState = { state: 'stopped' };
 /**
  * Ends the process once everything is stopped. `process.exit` and not `app.exit`: on macOS `app.exit` sometimes
  * returned and the process then never ended (about one run in a hundred; a smoke test of the packaged app in CI hung
- * for ten minutes, and the same would have happened to someone choosing Quit). 300 packaged runs in a row with
- * `process.exit` all ended (`ui/scripts/smoke-stress.sh`); settings are written when they change, so nothing is lost.
+ * for ten minutes, and the same would have happened to someone choosing Quit). That made it rarer but not impossible
+ * (the CI runner hung once more after `process.exit`), so a helper outside the process kills it if it is still alive a
+ * few seconds later (`exit.ts`). Settings are written when they change, so nothing is lost.
  */
 function leave(code: number): never {
+	armExitWatchdog();
+	if (process.env.EDGEHOP_SMOKE && process.env.EDGEHOP_TEST_WEDGE_EXIT) {
+		// A test of the safety net: behave like an exit that never finishes.
+		for (;;) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+	}
 	process.exit(code);
 }
 
