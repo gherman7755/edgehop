@@ -3,6 +3,7 @@
 //! The sessions in `edgehop-core` are written against [`Platform`], so they are tested on any machine with a
 //! fake and run on Windows with `edgehop-win`'s implementation.
 
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use edgehop_proto::{InputEvent, MonitorInfo};
@@ -39,6 +40,32 @@ pub trait CaptureHandle: Send + Sync {
 /// Keeps a panic-chord watch alive; dropping it stops watching.
 pub trait PanicGuard: Send {}
 
+/// Keeps an announcement or a search for computers alive; dropping it stops it.
+pub trait DiscoveryGuard: Send {}
+
+/// A computer running a receiver, found on the local network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredPeer {
+    /// The name it announces (its computer name).
+    pub name: String,
+    /// Where to connect, best first.
+    pub addresses: Vec<IpAddr>,
+    pub port: u16,
+}
+
+/// Finding computers on the local network (`_edgehop._tcp`, mDNS / DNS-SD), so nobody has to type addresses.
+pub trait Discovery: Send + Sync {
+    /// Announces a receiver listening on `port` under `name`. Dropping the guard withdraws the announcement.
+    fn advertise(&self, name: &str, port: u16) -> Result<Box<dyn DiscoveryGuard>, PlatformError>;
+    /// Looks for other computers' receivers until the guard is dropped. `on_change` is given the whole current
+    /// list, sorted by name and without `own_name`, every time it changes.
+    fn browse(
+        &self,
+        own_name: &str,
+        on_change: Box<dyn Fn(Vec<DiscoveredPeer>) + Send + Sync>,
+    ) -> Result<Box<dyn DiscoveryGuard>, PlatformError>;
+}
+
 /// Why capture could not start. The text is shown to the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformError(pub String);
@@ -69,6 +96,10 @@ pub trait Platform: Send + Sync + 'static {
         &self,
         sink: Arc<dyn CaptureSink>,
     ) -> Result<Arc<dyn CaptureHandle>, PlatformError>;
+    /// Finding computers on the network, if this platform can.
+    fn discovery(&self) -> Option<Arc<dyn Discovery>> {
+        None
+    }
     /// Calls `on_panic` when the panic chord (`edgehop_proto::is_panic_chord`) is typed on this computer's own
     /// keyboard, for as long as the returned guard lives. A receiver uses it so the person at the controlled
     /// computer can always stop being controlled. Platforms without keyboard access say so.

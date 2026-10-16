@@ -1,0 +1,19 @@
+[package]
+name = "edgehop-discovery"
+description = "EdgeHop LAN discovery over mDNS / DNS-SD (_edgehop._tcp), compatible with the Swift core's Bonjour"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+edgehop-input = { path = "../edgehop-input" }
+edgehop-proto = { path = "../edgehop-proto" }
+mdns-sd = "0.21.5"
+
+[dev-dependencies]
+edgehop-link = { path = "../edgehop-link" }

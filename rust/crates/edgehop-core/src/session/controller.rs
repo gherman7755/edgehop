@@ -11,6 +11,7 @@ use edgehop_link::{ClientConfig, ClientHandler, LinkClient, LinkError};
 use edgehop_proto::{is_panic_chord, ControlMessage, InputEvent, MonitorInfo};
 use edgehop_switch::{Actions, Mode, Point, Rect, SwitchController};
 
+use super::peers::Peers;
 use super::{log, Tracked};
 use crate::backend::{BackendError, ControllerConfig, ControllerState, Events, Source, Target};
 
@@ -330,14 +331,16 @@ fn size_text(monitors: &[MonitorInfo]) -> String {
 
 pub(super) struct ControllerSessions<P: Platform> {
     platform: Arc<P>,
+    peers: Arc<Peers>,
     shared: Arc<Shared>,
     start_lock: Mutex<()>,
 }
 
 impl<P: Platform> ControllerSessions<P> {
-    pub(super) fn new(platform: Arc<P>) -> Self {
+    pub(super) fn new(platform: Arc<P>, peers: Arc<Peers>) -> Self {
         Self {
             platform,
+            peers,
             shared: Arc::new(Shared {
                 state: Tracked::new(ControllerState::Idle),
                 generation: AtomicU64::new(0),
@@ -357,10 +360,22 @@ impl<P: Platform> ControllerSessions<P> {
         config: ControllerConfig,
         events: Events,
     ) -> Result<(), BackendError> {
-        let Target::Host { host, port } = config.target.clone() else {
-            return Err(BackendError::Unsupported(
-                "this build cannot find computers by name yet: connect by address".into(),
-            ));
+        let targets: Vec<(String, u16)> = match &config.target {
+            Target::Host { host, port } => vec![(host.clone(), *port)],
+            Target::Peer(name) => {
+                if !self.peers.supported() {
+                    return Err(BackendError::Unsupported(
+                        "this computer cannot find others by name: connect by address".into(),
+                    ));
+                }
+                let peer = self.peers.resolve(name).ok_or_else(|| {
+                    BackendError::Failed(format!("no computer named \"{name}\" was found nearby"))
+                })?;
+                peer.addresses
+                    .iter()
+                    .map(|address| (address.to_string(), peer.port))
+                    .collect()
+            }
         };
         let _guard = self
             .start_lock
@@ -390,8 +405,7 @@ impl<P: Platform> ControllerSessions<P> {
                     &shared,
                     generation,
                     &config,
-                    &host,
-                    port,
+                    &targets,
                     &thread_events,
                 );
                 if let Err(message) = outcome {
@@ -447,15 +461,9 @@ fn run<P: Platform>(
     shared: &Arc<Shared>,
     generation: u64,
     config: &ControllerConfig,
-    host: &str,
-    port: u16,
+    targets: &[(String, u16)],
     events: &Events,
 ) -> Result<(), String> {
-    log(
-        events,
-        Source::Controller,
-        format!("connecting to {host}:{port}…"),
-    );
     let closed = Arc::new(AtomicBool::new(false));
     let handler = Arc::new(LinkEvents {
         shared: Arc::clone(shared),
@@ -465,8 +473,40 @@ fn run<P: Platform>(
     });
     let mut client_config = ClientConfig::new(config.token.clone(), platform.device_name());
     client_config.monitors = platform.displays();
-    let (client, hello) =
-        LinkClient::connect(host, port, &client_config, handler).map_err(|e| describe(&e))?;
+    // A computer found by name may have several addresses (Wi-Fi, Ethernet, VPN): the first that answers wins.
+    let mut outcome = Err("there is no address to connect to".to_string());
+    for (index, (host, port)) in targets.iter().enumerate() {
+        log(
+            events,
+            Source::Controller,
+            format!("connecting to {host}:{port}…"),
+        );
+        match LinkClient::connect(host, *port, &client_config, Arc::clone(&handler) as _) {
+            Ok(connected) => {
+                outcome = Ok(connected);
+                break;
+            }
+            // The computer answered but did not want us (wrong token, not EdgeHop): another address will not help.
+            Err(error @ (LinkError::Rejected | LinkError::Protocol(_))) => {
+                outcome = Err(describe(&error));
+                break;
+            }
+            Err(error) => {
+                outcome = Err(describe(&error));
+                if index + 1 < targets.len() {
+                    log(
+                        events,
+                        Source::Controller,
+                        "no answer there, trying the next address",
+                    );
+                }
+            }
+        }
+        if shared.generation.load(Ordering::SeqCst) != generation {
+            return Ok(()); // stopped while connecting
+        }
+    }
+    let (client, hello) = outcome?;
     let client = Arc::new(client);
     if shared.generation.load(Ordering::SeqCst) != generation {
         client.close(); // stopped while connecting

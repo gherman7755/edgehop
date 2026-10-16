@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use edgehop_input::{Injector, PanicGuard, Platform};
+use edgehop_input::{DiscoveryGuard, Injector, PanicGuard, Platform};
 use edgehop_link::{LinkServer, ServerConfig, ServerHandler};
 use edgehop_proto::{ControlMessage, HelloMessage, InputEvent};
 
@@ -109,6 +109,8 @@ struct Run<P: Platform> {
     handler: Arc<Handler<P>>,
     events: Events,
     state: Arc<Tracked<ReceiverState>>,
+    /// The announcement on the network while listening; withdrawn when the run ends.
+    _announcement: Option<Box<dyn DiscoveryGuard>>,
     /// Watches for the panic chord while listening; dropped (and so stopped) with the run.
     _panic: Option<Box<dyn PanicGuard>>,
 }
@@ -225,11 +227,35 @@ impl<P: Platform> ReceiverSessions<P> {
                 None
             }
         };
+        // Let controllers find this computer by name.
+        let announcement = self.platform.discovery().and_then(|discovery| {
+            match discovery.advertise(&name, port) {
+                Ok(guard) => {
+                    log(
+                        &events,
+                        Source::Receiver,
+                        format!("announced on the network as \"{name}\""),
+                    );
+                    Some(guard)
+                }
+                Err(error) => {
+                    log(
+                        &events,
+                        Source::Receiver,
+                        format!(
+                            "WARNING: not announced on the network ({error}): connect by address"
+                        ),
+                    );
+                    None
+                }
+            }
+        });
         *slot = Some(Run {
             server,
             handler,
             events,
             state: Arc::clone(&self.state),
+            _announcement: announcement,
             _panic: guard,
         });
         Ok(port)

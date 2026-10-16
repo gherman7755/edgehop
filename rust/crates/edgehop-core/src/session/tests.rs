@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use edgehop_input::{
-    CaptureHandle, CaptureSink, OsInput, PanicGuard, Platform, PlatformError, Rect as InputRect,
+    CaptureHandle, CaptureSink, DiscoveredPeer, Discovery, DiscoveryGuard, OsInput, PanicGuard,
+    Platform, PlatformError, Rect as InputRect,
 };
 use edgehop_proto::{InputEvent, Modifiers, MonitorInfo, MouseButton};
 use serde_json::Value;
@@ -144,6 +145,7 @@ struct FakePlatform {
     ops: Ops,
     capture: Arc<Mutex<Option<Arc<FakeCapture>>>>,
     fail_capture: bool,
+    discovery: Option<Arc<dyn Discovery>>,
     /// Where `watch_panic` leaves the callback, so a test can type the panic chord; `None` = unsupported.
     panic_watch: Option<PanicSlot>,
 }
@@ -162,6 +164,7 @@ impl FakePlatform {
             ops: Ops::default(),
             capture: Arc::default(),
             fail_capture: false,
+            discovery: None,
             panic_watch: Some(Arc::default()),
         }
     }
@@ -210,6 +213,10 @@ impl Platform for FakePlatform {
             .ok_or_else(|| PlatformError("no keyboard access".into()))?;
         *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(on_panic);
         Ok(Box::new(FakePanicGuard))
+    }
+
+    fn discovery(&self) -> Option<Arc<dyn Discovery>> {
+        self.discovery.clone()
     }
 
     fn start_capture(
@@ -1138,4 +1145,245 @@ fn a_receiver_without_keyboard_access_warns_but_still_listens() {
             .any(|l| l.starts_with("WARNING: no local panic chord")),
         "{lines:?}"
     );
+}
+
+/// A network every fake computer shares: announcements and searches meet here, in memory.
+#[derive(Default)]
+struct FakeNetwork {
+    inner: Mutex<NetworkState>,
+}
+
+type PeersCallback = Arc<dyn Fn(Vec<DiscoveredPeer>) + Send + Sync>;
+
+#[derive(Default)]
+struct NetworkState {
+    announced: Vec<(String, u16)>,
+    searches: Vec<(u64, String, PeersCallback)>,
+    next_id: u64,
+}
+
+impl FakeNetwork {
+    fn peers_for(state: &NetworkState, own: &str) -> Vec<DiscoveredPeer> {
+        let mut peers: Vec<DiscoveredPeer> = state
+            .announced
+            .iter()
+            .filter(|(name, _)| name != own)
+            .map(|(name, port)| DiscoveredPeer {
+                name: name.clone(),
+                addresses: vec!["127.0.0.1".parse().unwrap()],
+                port: *port,
+            })
+            .collect();
+        peers.sort_by(|a, b| a.name.cmp(&b.name));
+        peers
+    }
+
+    fn notify(&self) {
+        let (searches, snapshot): (Vec<_>, Vec<_>) = {
+            let state = self.inner.lock().unwrap();
+            state
+                .searches
+                .iter()
+                .map(|(_, own, callback)| (Arc::clone(callback), Self::peers_for(&state, own)))
+                .unzip()
+        };
+        for (callback, peers) in searches.into_iter().zip(snapshot) {
+            callback(peers);
+        }
+    }
+
+    fn announced(&self) -> Vec<(String, u16)> {
+        self.inner.lock().unwrap().announced.clone()
+    }
+}
+
+struct NetworkGuard {
+    network: Arc<FakeNetwork>,
+    announced: Option<String>,
+    search: Option<u64>,
+}
+
+impl DiscoveryGuard for NetworkGuard {}
+
+impl Drop for NetworkGuard {
+    fn drop(&mut self) {
+        {
+            let mut state = self.network.inner.lock().unwrap();
+            if let Some(name) = &self.announced {
+                state.announced.retain(|(n, _)| n != name);
+            }
+            if let Some(id) = self.search {
+                state.searches.retain(|(i, _, _)| *i != id);
+            }
+        }
+        self.network.notify();
+    }
+}
+
+/// What a fake computer gets: a handle on the shared network.
+struct NetworkHandle(Arc<FakeNetwork>);
+
+impl Discovery for NetworkHandle {
+    fn advertise(&self, name: &str, port: u16) -> Result<Box<dyn DiscoveryGuard>, PlatformError> {
+        self.0
+            .inner
+            .lock()
+            .unwrap()
+            .announced
+            .push((name.to_string(), port));
+        self.0.notify();
+        Ok(Box::new(NetworkGuard {
+            network: Arc::clone(&self.0),
+            announced: Some(name.to_string()),
+            search: None,
+        }))
+    }
+
+    fn browse(
+        &self,
+        own_name: &str,
+        on_change: Box<dyn Fn(Vec<DiscoveredPeer>) + Send + Sync>,
+    ) -> Result<Box<dyn DiscoveryGuard>, PlatformError> {
+        let callback: PeersCallback = Arc::from(on_change);
+        let (id, current) = {
+            let mut state = self.0.inner.lock().unwrap();
+            state.next_id += 1;
+            let id = state.next_id;
+            state
+                .searches
+                .push((id, own_name.to_string(), Arc::clone(&callback)));
+            (id, FakeNetwork::peers_for(&state, own_name))
+        };
+        if !current.is_empty() {
+            callback(current);
+        }
+        Ok(Box::new(NetworkGuard {
+            network: Arc::clone(&self.0),
+            announced: None,
+            search: Some(id),
+        }))
+    }
+}
+
+fn on_network(platform: &mut FakePlatform, network: &Arc<FakeNetwork>) {
+    platform.discovery = Some(Arc::new(NetworkHandle(Arc::clone(network))));
+}
+
+#[test]
+fn a_listening_receiver_announces_itself_and_withdraws_when_it_stops() {
+    let network = Arc::new(FakeNetwork::default());
+    let mut platform = FakePlatform::new("receiver-pc", 800.0, 600.0);
+    on_network(&mut platform, &network);
+    let backend = SessionBackend::new(platform);
+    let (events, buffer) = events();
+    let port = backend
+        .start_receiver(
+            ReceiverConfig {
+                token: TOKEN.into(),
+                allow_keys: false,
+                debug: false,
+                port: 0,
+            },
+            events,
+        )
+        .unwrap();
+    assert_eq!(network.announced(), vec![("receiver-pc".to_string(), port)]);
+    let lines: Vec<String> = buffer
+        .events("log")
+        .iter()
+        .filter_map(|d| d["line"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "announced on the network as \"receiver-pc\""),
+        "{lines:?}"
+    );
+    backend.stop_receiver();
+    assert!(network.announced().is_empty());
+}
+
+#[test]
+fn a_controller_finds_computers_by_name_and_connects_to_the_one_it_picks() {
+    let network = Arc::new(FakeNetwork::default());
+    let mut receiver_platform = FakePlatform::new("receiver-pc", 800.0, 600.0);
+    on_network(&mut receiver_platform, &network);
+    let receiver = SessionBackend::new(receiver_platform);
+    receiver
+        .start_receiver(
+            ReceiverConfig {
+                token: TOKEN.into(),
+                allow_keys: false,
+                debug: false,
+                port: 0,
+            },
+            events().0,
+        )
+        .unwrap();
+
+    let mut controller_platform = FakePlatform::new("controller-pc", 1000.0, 800.0);
+    on_network(&mut controller_platform, &network);
+    let controller = SessionBackend::new(controller_platform);
+    assert!(
+        controller.peers().is_empty(),
+        "nothing is looked for before peers.watch"
+    );
+    let (events, buffer) = events();
+    controller.watch_peers(true, events.clone());
+    assert_eq!(controller.peers(), vec!["receiver-pc".to_string()]);
+    assert_eq!(
+        buffer.events("peers.changed").last().unwrap()["peers"],
+        serde_json::json!([{"name": "receiver-pc"}])
+    );
+
+    controller
+        .start_controller(
+            ControllerConfig {
+                target: Target::Peer("receiver-pc".into()),
+                token: TOKEN.into(),
+                side: Side::Right,
+                switching: true,
+                forward_keys: false,
+                debug: false,
+            },
+            events.clone(),
+        )
+        .unwrap();
+    wait_until("the controller to connect", || {
+        matches!(
+            controller.controller_state(),
+            ControllerState::Connected { .. }
+        )
+    });
+    controller.stop_controller();
+
+    // A computer that went away is gone from the list, and looking can be switched off.
+    receiver.stop_receiver();
+    assert!(controller.peers().is_empty());
+    controller.watch_peers(false, events);
+}
+
+#[test]
+fn an_unknown_name_and_a_platform_without_discovery_are_told_apart() {
+    let network = Arc::new(FakeNetwork::default());
+    let mut platform = FakePlatform::new("controller-pc", 1000.0, 800.0);
+    on_network(&mut platform, &network);
+    let with = SessionBackend::new(platform);
+    let config = |name: &str| ControllerConfig {
+        target: Target::Peer(name.into()),
+        token: TOKEN.into(),
+        side: Side::Right,
+        switching: true,
+        forward_keys: false,
+        debug: false,
+    };
+    match with.start_controller(config("nobody"), events().0) {
+        Err(BackendError::Failed(message)) => assert!(message.contains("\"nobody\""), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    let without = SessionBackend::new(FakePlatform::new("x", 100.0, 100.0));
+    assert!(matches!(
+        without.start_controller(config("nobody"), events().0),
+        Err(BackendError::Unsupported(_))
+    ));
 }

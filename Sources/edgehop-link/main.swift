@@ -8,6 +8,7 @@ import Foundation
 //   edgehop-link serve   [--port 47474] [--seconds 300] [--allow-keys] [--debug]
 //   edgehop-link connect HOST [--port 47474] [--seconds 120] [--keys] [--debug]
 //                        [--switch [--side right|left|top|bottom]]
+//   edgehop-link browse  [--seconds 10] [--connect NAME]      list computers found nearby (Bonjour)
 //
 // Token: pass it through the EDGEHOP_TOKEN environment variable (preferred; --token shows up in `ps`).
 // Without --switch, `connect` mirrors the mouse (both cursors move). Keys are OFF unless you opt in on BOTH
@@ -97,10 +98,46 @@ func connect() {
     print("Stopped.")
 }
 
+final class Once {
+    private let lock = NSLock()
+    private var done = false
+    /// True the first time only.
+    func first() -> Bool { lock.lock(); defer { lock.unlock() }; let was = done; done = true; return !was }
+}
+
+/// Lists the computers announcing `_edgehop._tcp` (a check of discovery, also against the Rust core). With
+/// `--connect NAME` it connects to that one (token from EDGEHOP_TOKEN), which proves its address resolves.
+func browse() {
+    let seconds = argument("--seconds").flatMap(Double.init) ?? 10
+    let wanted = argument("--connect")
+    let token = wanted == nil ? "" : requireToken()
+    let done = DispatchSemaphore(value: 0)
+    let session = ControllerSession()
+    let started = Once()
+    let peers = PeerBrowser(ownName: Device.name)
+    peers.onChange = { found in
+        print("found: " + (found.isEmpty ? "(nothing)" : found.map(\.name).joined(separator: ", ")))
+        guard let wanted, let peer = found.first(where: { $0.name == wanted }) else { return }
+        guard started.first() else { return }
+        session.onLog = { print($0) }
+        session.onState = { state in
+            switch state {
+            case let .connected(peer, _): print("connected to \(peer)"); done.signal()
+            case .failed: done.signal()
+            default: break
+            }
+        }
+        session.start(ControllerConfig(target: .peer(peer), token: token, side: .right, switching: false))
+    }
+    peers.start()
+    waitUntilDone(done, seconds: seconds) { session.stop(); peers.stop() }
+}
+
 switch CommandLine.arguments.dropFirst().first {
 case "token": print(TokenStore.generate())
+case "browse": browse()
 case "serve": serve()
 case "connect": connect()
 default:
-    fail("usage:\n  edgehop-link token\n  edgehop-link serve [--port N] [--seconds N] [--allow-keys] [--debug]\n  edgehop-link connect HOST [--port N] [--seconds N] [--keys] [--debug] [--switch [--side S]]", code: 2)
+    fail("usage:\n  edgehop-link token\n  edgehop-link browse [--seconds N] [--connect NAME]\n  edgehop-link serve [--port N] [--seconds N] [--allow-keys] [--debug]\n  edgehop-link connect HOST [--port N] [--seconds N] [--keys] [--debug] [--switch [--side S]]", code: 2)
 }

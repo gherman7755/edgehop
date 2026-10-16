@@ -19,5 +19,8 @@ mod pointer;
 pub use injector::{Injector, DEFAULT_IDLE_RESYNC, DEFAULT_WARP_THRESHOLD};
 pub use modifiers::ModifierTracker;
 pub use os::OsInput;
-pub use platform::{CaptureHandle, CaptureSink, MotionMapper, PanicGuard, Platform, PlatformError};
+pub use platform::{
+    CaptureHandle, CaptureSink, DiscoveredPeer, Discovery, DiscoveryGuard, MotionMapper,
+    PanicGuard, Platform, PlatformError,
+};
 pub use pointer::{PointerState, Rect};

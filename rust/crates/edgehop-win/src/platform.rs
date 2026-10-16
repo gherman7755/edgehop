@@ -7,8 +7,9 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use edgehop_discovery::MdnsDiscovery;
 use edgehop_input::{
-    CaptureHandle, CaptureSink, MotionMapper, PanicGuard, Platform, PlatformError,
+    CaptureHandle, CaptureSink, Discovery, MotionMapper, PanicGuard, Platform, PlatformError,
 };
 use edgehop_proto::{is_panic_chord, MonitorInfo};
 use windows_sys::Win32::Foundation::POINT;
@@ -20,13 +21,16 @@ use crate::dpi::ensure_dpi_aware;
 use crate::keyboard::KeySubscription;
 use crate::output::WinOutput;
 
-#[derive(Debug, Default)]
-pub struct WinPlatform;
+/// Windows as a [`Platform`]. Owns the network discovery (mDNS), which is started lazily the first time it is used.
+#[derive(Default)]
+pub struct WinPlatform {
+    discovery: Arc<MdnsDiscovery>,
+}
 
 impl WinPlatform {
     pub fn new() -> Self {
         ensure_dpi_aware();
-        Self
+        Self::default()
     }
 }
 
@@ -51,6 +55,10 @@ impl Platform for WinPlatform {
 
     fn output(&self) -> WinOutput {
         WinOutput::new()
+    }
+
+    fn discovery(&self) -> Option<Arc<dyn Discovery>> {
+        Some(Arc::clone(&self.discovery) as Arc<dyn Discovery>)
     }
 
     fn start_capture(
