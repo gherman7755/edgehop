@@ -2,8 +2,8 @@
 //! `scripts/check-rust-compat.sh` feeds them to the Swift core to prove Swift accepts what Rust writes.
 
 use edgehop_proto::{
-    encode_frame, make_nonce, ping_payload, proof, ControlMessage, Frame, FrameType, HelloMessage,
-    InputEvent, Modifiers, MonitorInfo, MouseButton,
+    encode_frame, ping_payload, ControlMessage, Frame, FrameType, HelloMessage, InputEvent,
+    Modifiers, MonitorInfo, MouseButton,
 };
 use serde_json::{json, Value};
 
@@ -87,17 +87,8 @@ fn main() {
         },
     ];
 
-    // One fixed nonce and one freshly generated, so Swift verifies proofs it has never seen.
-    let fresh = make_nonce().expect("operating system random generator");
-    let auth: Vec<Value> = [[7u8; 32], fresh]
-        .iter()
-        .map(|nonce| json!({"token": "correct-horse-battery", "nonceHex": hex(nonce), "proofHex": hex(&proof("correct-horse-battery", nonce))}))
-        .collect();
-
-    let mut challenge = HelloMessage::new("PC");
-    challenge.nonce = Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=".into());
-    let mut answer = HelloMessage::new("PC");
-    answer.proof = Some("AAAA".into());
+    let challenge = HelloMessage::new("PC").with_keymap();
+    let mut answer = HelloMessage::new("PC").with_keymap();
     answer.monitors = Some(vec![MonitorInfo {
         id: "w1".into(),
         x: 0.0,
@@ -118,10 +109,63 @@ fn main() {
         "frames": frames.iter().map(|f| json!({
             "type": f.frame_type as u8, "flags": f.flags, "payloadHex": hex(&f.payload), "hex": hex(&encode_frame(f).unwrap()),
         })).collect::<Vec<_>>(),
-        "auth": auth,
+        "noise": [noise_vector()],
         "hello": hellos,
         "control": [{"json": String::from_utf8(ControlMessage::ReleaseAll.to_frame().payload).unwrap()}],
         "ping": [{"nowMillis": now, "payloadHex": hex(&ping_payload(now))}],
     });
     println!("{}", serde_json::to_string_pretty(&root).unwrap());
+}
+
+fn fixed(byte: u8) -> [u8; 32] {
+    [byte; 32]
+}
+
+/// One complete handshake with fixed keys (never use these anywhere else), the controller's hello as the payload of
+/// message 3, and a few transport messages in both directions.
+fn noise_vector() -> Value {
+    use edgehop_proto::{psk_from_token, Handshake, Role};
+    let token = "correct-horse-battery";
+    let psk = psk_from_token(token);
+    let mut initiator =
+        Handshake::with_fixed_keys_for_testing(Role::Initiator, &psk, &fixed(0x11), &fixed(0x22))
+            .expect("initiator");
+    let mut responder =
+        Handshake::with_fixed_keys_for_testing(Role::Responder, &psk, &fixed(0x33), &fixed(0x44))
+            .expect("responder");
+    let payload = br#"{"version":2,"name":"PC","keymap":"hid"}"#;
+    let m1 = initiator.write(&[]).unwrap();
+    responder.read(&m1).unwrap();
+    let m2 = responder.write(&[]).unwrap();
+    initiator.read(&m2).unwrap();
+    let m3 = initiator.write(payload).unwrap();
+    assert_eq!(responder.read(&m3).unwrap(), payload);
+    let (mut initiator_seal, _) = initiator.into_transport().unwrap();
+    let (mut responder_seal, _) = responder.into_transport().unwrap();
+    let transport = [
+        ("initiator", b"first frame bytes".as_slice()),
+        ("responder", b"answer".as_slice()),
+        ("initiator", b"second".as_slice()),
+    ]
+    .iter()
+    .map(|(from, plaintext)| {
+        let wire = if *from == "initiator" {
+            initiator_seal.seal(plaintext)
+        } else {
+            responder_seal.seal(plaintext)
+        }
+        .unwrap();
+        json!({"from": from, "plaintextHex": hex(plaintext), "wireHex": hex(&wire)})
+    })
+    .collect::<Vec<_>>();
+    json!({
+        "token": token,
+        "initiatorStaticHex": hex(&fixed(0x11)),
+        "initiatorEphemeralHex": hex(&fixed(0x22)),
+        "responderStaticHex": hex(&fixed(0x33)),
+        "responderEphemeralHex": hex(&fixed(0x44)),
+        "payloadHex": hex(payload),
+        "messagesHex": [hex(&m1), hex(&m2), hex(&m3)],
+        "transport": transport,
+    })
 }

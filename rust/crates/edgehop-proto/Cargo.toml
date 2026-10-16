@@ -1,6 +1,6 @@
 [package]
 name = "edgehop-proto"
-description = "EdgeHop wire protocol: frames, input records, token handshake (see docs/PROTOCOL.md)"
+description = "EdgeHop wire protocol: frames, input records, the encrypted handshake (see docs/PROTOCOL.md)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,10 +11,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-base64 = "0.23.1"
-getrandom = "0.3.4"
 hmac = "0.12.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
+snow = { version = "0.10.0", default-features = false, features = ["default-resolver", "use-chacha20poly1305", "use-sha2", "use-curve25519", "use-getrandom"] }
 thiserror = "2.0.21"
