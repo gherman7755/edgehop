@@ -43,6 +43,16 @@ let quitting = false;
 let controllerState: ControllerState = { state: 'idle' };
 let receiverState: ReceiverState = { state: 'stopped' };
 
+/**
+ * Ends the process once everything is stopped. `process.exit` and not `app.exit`: on macOS `app.exit` sometimes
+ * returned and the process then never ended (about one run in a hundred; a smoke test of the packaged app in CI hung
+ * for ten minutes, and the same would have happened to someone choosing Quit). 300 packaged runs in a row with
+ * `process.exit` all ended (`ui/scripts/smoke-stress.sh`); settings are written when they change, so nothing is lost.
+ */
+function leave(code: number): never {
+	process.exit(code);
+}
+
 function sharing(): boolean {
 	return controllerState.state === 'connecting' || controllerState.state === 'connected' || receiverState.state !== 'stopped';
 }
@@ -161,7 +171,7 @@ app.on('before-quit', event => {
 	quitting = true;
 	event.preventDefault();
 	// Release the keyboard and mouse before leaving: closing the core's input does the same if this is cut short.
-	void supervisor.stop().finally(() => app.exit(0));
+	void supervisor.stop().finally(() => leave(0));
 });
 
 void app.whenReady().then(async () => {
@@ -190,12 +200,12 @@ void app.whenReady().then(async () => {
 			console.log(await runSmoke(window!));
 			quitting = true;
 			await supervisor.stop();
-			app.exit(0);
+			leave(0);
 		} catch (error) {
 			console.error(String(error));
 			quitting = true;
 			await supervisor.stop();
-			app.exit(1);
+			leave(1);
 		}
 		return;
 	}
