@@ -14,16 +14,20 @@ public struct HelloMessage: Codable, Equatable, Sendable {
     public var monitors: [MonitorInfo]?
     /// `"hid"` if the sender sends and understands HID key codes (`Keymap`). Absent: macOS keycodes, so no keys.
     public var keymap: String?
+    /// `true` (in a receiver's hello) if this computer cannot apply input right now, e.g. macOS permission missing.
+    /// Absent: it can.
+    public var inputBlocked: Bool?
 
     /// True if the sender announced HID key codes.
     public var speaksHIDKeys: Bool { keymap == Keymap.name }
 
-    public init(version: Int = 2, name: String, accepted: Bool? = nil, monitors: [MonitorInfo]? = nil, keymap: String? = nil) {
+    public init(version: Int = 2, name: String, accepted: Bool? = nil, monitors: [MonitorInfo]? = nil, keymap: String? = nil, inputBlocked: Bool? = nil) {
         self.version = version
         self.name = name
         self.accepted = accepted
         self.monitors = monitors
         self.keymap = keymap
+        self.inputBlocked = inputBlocked
     }
 }
 
@@ -241,6 +245,8 @@ public final class LinkServer {
     private var listener: NWListener?
     private var active: LinkConnection?
     private let authTimeout: TimeInterval = 5
+    /// Asked for every hello: true announces that this computer cannot apply input right now.
+    public var isInputBlocked: () -> Bool = { false }
 
     public init(token: String, name: String) {
         self.token = token
@@ -288,7 +294,8 @@ public final class LinkServer {
             guard let self, let conn else { return }
             guard let hello = try? JSONDecoder().decode(HelloMessage.self, from: payload) else { conn.cancel(); return }
             authenticated = true
-            conn.send(encode(HelloMessage(name: self.name, accepted: true, monitors: LocalDisplays.list(), keymap: Keymap.name)))
+            let blocked = self.isInputBlocked()
+            conn.send(encode(HelloMessage(name: self.name, accepted: true, monitors: LocalDisplays.list(), keymap: Keymap.name, inputBlocked: blocked ? true : nil)))
             self.onPeerConnected?(hello)
         }
         conn.onFrame = { [weak self, weak conn] frame in

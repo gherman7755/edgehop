@@ -1,3 +1,4 @@
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import Network
@@ -73,6 +74,7 @@ public final class ReceiverSession {
     public func start(port: UInt16 = 47474) throws {
         guard server == nil else { return }
         let server = LinkServer(token: token, name: name)
+        server.isInputBlocked = { !AXIsProcessTrusted() }
         server.onInput = { [weak self] event in self?.apply(event) }
         server.onControl = { [weak self] message in
             if message == .releaseAll { self?.injector.releaseAll(); self?.log("peer asked to release all keys/buttons") }
@@ -84,6 +86,9 @@ public final class ReceiverSession {
             self.log("peer connected: \(hello.name), keymap \(hello.keymap ?? "none")")
             if self.allowKeys, !hello.speaksHIDKeys {
                 self.log("this peer does not announce the shared key codes (update EdgeHop there): its keys are dropped")
+            }
+            if !AXIsProcessTrusted() {
+                self.log("WARNING: cannot move the cursor or type for this peer: grant Accessibility to EdgeHop in System Settings → Privacy & Security, then restart the app")
             }
             self.set(.connected(peer: hello.name))
         }
@@ -169,6 +174,8 @@ public final class ControllerSession {
     public var onState: ((ControllerState) -> Void)?
     public var onLog: ((String) -> Void)?
     public var onLatency: ((Double) -> Void)?
+    /// The other computer connected but told us it cannot apply our input (a problem to show the user).
+    public var onWarning: ((String) -> Void)?
 
     private struct Parts {
         var client: LinkClient
@@ -246,6 +253,11 @@ public final class ControllerSession {
             hello = try client.connect(to: peer.endpoint, label: peer.name)
         }
         log("connected to \"\(hello.name)\" \((hello.monitors ?? []).map { "\(Int($0.width))x\(Int($0.height))" }.joined(separator: " "))")
+        if hello.inputBlocked == true {
+            let message = "\"\(hello.name)\" is connected but cannot apply input: its EdgeHop lacks a permission (on a Mac: Accessibility). Fix it there and restart EdgeHop on that computer."
+            log("WARNING: \(message)")
+            onWarning?(message)
+        }
         client.onClosed = { [weak self] _ in
             self?.log("link closed by the other computer")
             self?.teardown()

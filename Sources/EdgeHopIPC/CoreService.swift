@@ -58,6 +58,7 @@ public final class CoreService: IPCHandler {
         controller.onState = { [weak self] state in self?.emit("controller.state", Self.encode(state)) }
         controller.onLog = { [weak self] line in self?.emit("log", ["source": "controller", "line": line]) }
         controller.onLatency = { [weak self] ms in self?.emit("latency", ["ms": ms]) }
+        controller.onWarning = { [weak self] message in self?.emit("controller.warning", ["message": message]) }
     }
 
     // MARK: Dispatch
