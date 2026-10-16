@@ -188,6 +188,22 @@ fn rejects_a_wrong_token_and_delivers_nothing() {
     assert!(connect(server.port(), TOKEN, "cli").is_ok());
 }
 
+/// A refused or finished peer must free the slot before it is told, or an immediate retry is dropped.
+#[test]
+fn an_immediate_retry_after_a_refusal_or_a_disconnect_is_accepted() {
+    let (server, _) = start_server(Duration::from_secs(5));
+    for round in 0..200 {
+        let refused = connect(server.port(), "not-the-token-xx", "cli");
+        assert_eq!(refused.err(), Some(LinkError::Rejected), "round {round}");
+        let (client, _, _) = connect(server.port(), TOKEN, "cli")
+            .unwrap_or_else(|e| panic!("retry after a refusal, round {round}: {e}"));
+        drop(client);
+        let (again, _, _) = connect(server.port(), TOKEN, "cli")
+            .unwrap_or_else(|e| panic!("retry after a disconnect, round {round}: {e}"));
+        drop(again);
+    }
+}
+
 #[test]
 fn answers_ping_with_the_same_payload() {
     let (server, _) = start_server(Duration::from_secs(5));

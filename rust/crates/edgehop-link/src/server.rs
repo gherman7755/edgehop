@@ -53,6 +53,9 @@ impl ServerConfig {
     }
 }
 
+/// How long a new connection waits for the previous peer's slot to free up.
+const SLOT_WAIT: Duration = Duration::from_millis(750);
+
 struct Shared {
     config: ServerConfig,
     handler: Arc<dyn ServerHandler>,
@@ -139,21 +142,33 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
         }
         let Ok(stream) = incoming else { continue };
         let id = shared.next_id.fetch_add(1, Ordering::SeqCst);
-        {
-            let mut active = lock(&shared.active);
-            if active.is_some() {
-                continue; // one peer at a time: the new connection is dropped
+        // One peer at a time. A controller that reconnects right after leaving (stop and start again) can arrive
+        // before the old connection has noticed it is closed, so wait a moment for the slot before dropping.
+        let deadline = Instant::now() + SLOT_WAIT;
+        let claimed = loop {
+            {
+                let mut active = lock(&shared.active);
+                if active.is_none() {
+                    let Ok(handle) = stream.try_clone() else {
+                        break false;
+                    };
+                    *active = Some((id, handle));
+                    break true;
+                }
             }
-            let Ok(handle) = stream.try_clone() else {
-                continue;
-            };
-            *active = Some((id, handle));
+            if Instant::now() >= deadline || shared.stop.load(Ordering::SeqCst) {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        if !claimed {
+            continue; // the new connection is dropped
         }
         let peer_shared = Arc::clone(shared);
         let spawned = thread::Builder::new()
             .name("edgehop-link-peer".into())
             .spawn(move || {
-                serve_peer(&peer_shared, stream);
+                serve_peer(&peer_shared, stream, id);
                 peer_shared.release(id);
             });
         if spawned.is_err() {
@@ -162,7 +177,9 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
     }
 }
 
-fn serve_peer(shared: &Shared, stream: TcpStream) {
+/// `id` is released before the connection is closed on the way out: a controller that sees the refusal or the
+/// close and reconnects at once must not find the slot still taken and be dropped.
+fn serve_peer(shared: &Shared, stream: TcpStream, id: u64) {
     let _ = stream.set_nodelay(true); // small input records: never wait for Nagle
     let Ok(write_half) = stream.try_clone() else {
         return;
@@ -186,6 +203,7 @@ fn serve_peer(shared: &Shared, stream: TcpStream) {
     let Some(hello) = authenticate(&config.token, &nonce, &first) else {
         let mut refusal = HelloMessage::new(config.name.clone());
         refusal.accepted = Some(false);
+        shared.release(id);
         let _ = writer.send(&refusal.to_frame());
         writer.shutdown();
         return;
@@ -223,6 +241,7 @@ fn serve_peer(shared: &Shared, stream: TcpStream) {
         }
     }
     shared.handler.on_peer_disconnected();
+    shared.release(id);
     writer.shutdown();
 }
 
