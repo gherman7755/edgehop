@@ -108,7 +108,8 @@ private func makeController(
         let rec = Recorder()
         let c = makeController(rec)
         c.handleMotion(position: Point(x: 1696, y: -500), delta: Point(x: 6, y: 0)) // left from the monitor above
-        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: -5, y: 0)) // remote x is 0: facing edge
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: 20, y: 0)) // come away from the entry edge
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: -25, y: 0)) // remote x reaches 0: facing edge
         #expect(c.mode == .local)
         #expect(rec.order == ["enter", "release", "leave"])
         #expect(rec.left == [Point(x: 1696, y: -500)]) // back on the monitor above, same height
@@ -169,6 +170,38 @@ private func makeController(
         #expect(rec.released == 1)
         #expect(rec.left == [Point(x: 1511, y: 321)])
         #expect(!c.shouldSwallow(.mouseMoveAbsolute(x: 5, y: 5))) // panic exit must not swallow a stray move
+    }
+
+    @Test func doesNotBounceStraightBackAfterEntering() {
+        let rec = Recorder()
+        let c = makeController(rec)
+        c.handleMotion(position: Point(x: 1511, y: 500), delta: Point(x: 6, y: 0))
+        // A jitter to the left right after crossing only holds the cursor at the edge.
+        c.handleMotion(position: Point(x: 1511, y: 500), delta: Point(x: -1, y: 0))
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: 9, y: 0)) // 9 px in: not far enough yet
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: -20, y: 0))
+        #expect(c.mode == .remote)
+        #expect(rec.left.isEmpty)
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: 10, y: 0)) // 10 px in: armed
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: -20, y: 0))
+        #expect(c.mode == .local)
+    }
+
+    @Test func aDragStartedOnTheOtherComputerStaysThere() {
+        let rec = Recorder()
+        let c = makeController(rec)
+        c.handleMotion(position: Point(x: 1511, y: 500), delta: Point(x: 6, y: 0))
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: 30, y: 0))
+        c.handle(.mouseButton(.left, isDown: true))
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: -60, y: 0)) // through the facing edge, button held
+        #expect(c.mode == .remote)
+        #expect(rec.left.isEmpty)
+        #expect(rec.sent.contains(.mouseButton(.left, isDown: true)))
+        // The cursor was held at the edge: only the 30 px that were left were applied.
+        #expect(rec.sent.last == .mouseMoveDelta(dx: -30, dy: 0))
+        c.handle(.mouseButton(.left, isDown: false))
+        c.handleMotion(position: Point(x: 0, y: 0), delta: Point(x: -5, y: 0))
+        #expect(c.mode == .local)
     }
 
     @Test func crossesAgainAfterReturning() {
