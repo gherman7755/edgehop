@@ -108,19 +108,9 @@ private final class Box<T> {
     }
 }
 
-@Suite struct LinkAuthTests {
-    @Test func acceptsOnlyTheMatchingTokenAndNonce() {
-        let nonce = LinkAuth.makeNonce()
-        let proof = LinkAuth.proof(token: "correct-horse-battery", nonce: nonce)
-        #expect(LinkAuth.verify(token: "correct-horse-battery", nonce: nonce, proof: proof))
-        #expect(!LinkAuth.verify(token: "wrong-token-xxxxxxx", nonce: nonce, proof: proof))
-        #expect(!LinkAuth.verify(token: "correct-horse-battery", nonce: LinkAuth.makeNonce(), proof: proof))
-        #expect(nonce.count == 32)
-        #expect(nonce != LinkAuth.makeNonce())
-    }
-
+@Suite struct LinkMessageTests {
     @Test func helloRoundTripsThroughJSON() throws {
-        let hello = HelloMessage(name: "mac", proof: "abc", monitors: [MonitorInfo(id: "d1", x: 0, y: 0, width: 1920, height: 1080)])
+        let hello = HelloMessage(name: "mac", accepted: true, monitors: [MonitorInfo(id: "d1", x: 0, y: 0, width: 1920, height: 1080)])
         let decoded = try JSONDecoder().decode(HelloMessage.self, from: JSONEncoder().encode(hello))
         #expect(decoded == hello)
     }
