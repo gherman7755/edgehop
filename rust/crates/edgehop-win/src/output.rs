@@ -1,10 +1,11 @@
 use std::mem::size_of;
 
 use edgehop_input::{OsInput, Rect};
-use edgehop_proto::{Modifiers, MouseButton};
+use edgehop_proto::{hid_to_windows, Modifiers, MouseButton};
 use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
     MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
     MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
     MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
@@ -63,6 +64,32 @@ fn send(flags: u32, dx: i32, dy: i32, mouse_data: u32) {
                 dx,
                 dy,
                 mouseData: mouse_data,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: MARKER,
+            },
+        },
+    };
+    // SAFETY: one fully initialised INPUT and its exact size, as SendInput requires.
+    unsafe {
+        SendInput(1, &input, size_of::<INPUT>() as i32);
+    }
+}
+
+fn send_key(scan: u16, extended: bool, is_down: bool) {
+    let mut flags = KEYEVENTF_SCANCODE;
+    if extended {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    if !is_down {
+        flags |= KEYEVENTF_KEYUP;
+    }
+    let input = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: 0,
+                wScan: scan,
                 dwFlags: flags,
                 time: 0,
                 dwExtraInfo: MARKER,
@@ -139,8 +166,13 @@ impl OsInput for WinOutput {
         }
     }
 
-    fn key(&mut self, _code: u16, _is_down: bool, _modifiers: Modifiers) {
-        // Key codes on the wire are macOS keycodes until the neutral key map exists: not translated yet.
+    fn key(&mut self, code: u16, is_down: bool, _modifiers: Modifiers) {
+        // Modifier keys arrive as events of their own, so the modifier state is not needed here. Keys are sent
+        // by scan code, which names the physical key and leaves the layout to this computer.
+        let Some(key) = hid_to_windows(code) else {
+            return; // a key Windows has no equivalent for
+        };
+        send_key(key.scan, key.extended, is_down);
     }
 }
 
