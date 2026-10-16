@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use edgehop_proto::InputEvent;
@@ -47,6 +48,14 @@ struct Inner {
     origin: Option<Rect>,
     /// Buttons held, in either mode: while one is, neither computer is left (the release would go astray).
     buttons_down: usize,
+    /// Keys held down on this computer (their presses were seen by local applications). Their releases must reach
+    /// local applications even after control has moved to the other computer, or they would stay pressed here.
+    local_keys: HashSet<u16>,
+    /// Keys whose press was forwarded to the other computer and that are still down.
+    remote_keys: HashSet<u16>,
+    /// Keys still held after control came back from a remote press: local applications never saw the press, so
+    /// they must not see the repeats or the release either.
+    suppressed: HashSet<u16>,
     /// The remote cursor has moved [`ARM_DISTANCE`] away from the edge it entered at, so a return is allowed.
     armed: bool,
     last_local: Point,
@@ -107,6 +116,9 @@ impl<A: Actions> SwitchController<A> {
                 cursor: None,
                 origin: None,
                 buttons_down: 0,
+                local_keys: HashSet::new(),
+                remote_keys: HashSet::new(),
+                suppressed: HashSet::new(),
                 armed: false,
                 last_local: Point::default(),
                 swallow_transition_move: false,
@@ -188,16 +200,32 @@ impl<A: Actions> SwitchController<A> {
                     inner.buttons_down.saturating_sub(1)
                 };
             }
+            (Mode::Local, InputEvent::Key { code, is_down, .. }) => {
+                // A key that is still down from a remote press is not ours to track: applications never saw it.
+                if !inner.suppressed.contains(code) {
+                    Self::track_local_key(&mut inner, *code, *is_down);
+                }
+            }
             (Mode::Local, _) => {}
             // Motion goes through `handle_motion`.
             (
                 Mode::Remote,
                 InputEvent::MouseMoveAbsolute { .. } | InputEvent::MouseMoveDelta { .. },
             ) => {}
-            (Mode::Remote, InputEvent::Key { .. }) => {
-                if self.forward_keys {
+            (Mode::Remote, InputEvent::Key { code, is_down, .. }) => {
+                if !self.forward_keys {
+                    Self::track_local_key(&mut inner, *code, *is_down); // keys keep working here
+                } else if !inner.local_keys.contains(code) {
+                    // Pressed on the other computer: forward it and remember it until it is released.
+                    if *is_down {
+                        inner.remote_keys.insert(*code);
+                    } else {
+                        inner.remote_keys.remove(code);
+                    }
                     self.actions.send(*event);
                 }
+                // else: held since before control moved. The other computer never saw it go down, so neither
+                // its repeats nor its release are sent; the release goes to local applications (`should_swallow`).
             }
             (Mode::Remote, InputEvent::MouseButton { is_down, .. }) => {
                 inner.buttons_down = if *is_down {
@@ -215,9 +243,32 @@ impl<A: Actions> SwitchController<A> {
     pub fn should_swallow(&self, event: &InputEvent) -> bool {
         let mut inner = self.lock();
         match inner.mode {
-            // Keys keep working locally unless they are forwarded.
-            Mode::Remote => !matches!(event, InputEvent::Key { .. }) || self.forward_keys,
+            Mode::Remote => match event {
+                // Keys keep working locally unless they are forwarded, and a key held since before control moved
+                // must still be released here.
+                InputEvent::Key { code, is_down, .. } => {
+                    if !self.forward_keys {
+                        false
+                    } else if inner.local_keys.contains(code) {
+                        if !*is_down {
+                            inner.local_keys.remove(code);
+                        }
+                        *is_down // repeats are swallowed, the release is let through
+                    } else {
+                        true
+                    }
+                }
+                _ => true,
+            },
             Mode::Local => {
+                if let InputEvent::Key { code, is_down, .. } = event {
+                    if inner.suppressed.contains(code) {
+                        if !*is_down {
+                            inner.suppressed.remove(code);
+                        }
+                        return true;
+                    }
+                }
                 // The move that brought us back must not reach applications: its location predates the warp.
                 if inner.swallow_transition_move && is_move(event) {
                     inner.swallow_transition_move = false;
@@ -237,7 +288,19 @@ impl<A: Actions> SwitchController<A> {
         }
     }
 
+    fn track_local_key(inner: &mut Inner, code: u16, is_down: bool) {
+        if is_down {
+            inner.local_keys.insert(code);
+        } else {
+            inner.local_keys.remove(&code);
+        }
+    }
+
     fn leave(&self, inner: &mut Inner, to: Point, swallow_current_move: bool) {
+        // Keys still down from a remote press: the other computer lets go (release_all), and here nothing about
+        // them is shown to applications until they are released.
+        let held: Vec<u16> = inner.remote_keys.drain().collect();
+        inner.suppressed.extend(held);
         inner.mode = Mode::Local;
         inner.cursor = None;
         inner.origin = None;
@@ -575,6 +638,79 @@ mod tests {
                 }
             ]
         );
+    }
+
+    fn key_event(code: u16, is_down: bool) -> InputEvent {
+        InputEvent::Key {
+            code,
+            is_down,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn a_key_held_before_crossing_is_released_here_and_never_forwarded() {
+        let (c, rec) = controller(vec![LAPTOP, MONITOR_ABOVE], Side::Right, true);
+        const SHIFT: u16 = 0xE1;
+        // Shift goes down locally (applications see it), then the cursor crosses.
+        c.handle(&key_event(SHIFT, true));
+        assert!(!c.should_swallow(&key_event(SHIFT, true)));
+        c.handle_motion(p(1511.0, 500.0), p(6.0, 0.0));
+        rec.clear_sent();
+
+        // Its repeats stay out of the way, and nothing about it reaches the other computer...
+        c.handle(&key_event(SHIFT, true));
+        assert!(c.should_swallow(&key_event(SHIFT, true)));
+        // ...but its release must reach this computer's applications, or Shift would stay pressed here.
+        c.handle(&key_event(SHIFT, false));
+        assert!(!c.should_swallow(&key_event(SHIFT, false)));
+        assert_eq!(rec.sent(), vec![]);
+
+        // A key pressed after crossing belongs to the other computer.
+        c.handle(&key_event(0x04, true));
+        assert!(c.should_swallow(&key_event(0x04, true)));
+        c.handle(&key_event(0x04, false));
+        assert!(c.should_swallow(&key_event(0x04, false)));
+        assert_eq!(
+            rec.sent(),
+            vec![key_event(0x04, true), key_event(0x04, false)]
+        );
+        // And Shift, released, is an ordinary key again.
+        c.handle(&key_event(SHIFT, true));
+        assert!(c.should_swallow(&key_event(SHIFT, true)));
+        assert_eq!(rec.sent().last(), Some(&key_event(SHIFT, true)));
+    }
+
+    #[test]
+    fn a_key_still_down_when_control_comes_back_stays_hidden_until_released() {
+        let (c, rec) = controller(vec![LAPTOP, MONITOR_ABOVE], Side::Right, true);
+        c.handle_motion(p(1511.0, 500.0), p(6.0, 0.0));
+        c.handle(&key_event(0x04, true)); // forwarded: the other computer sees A go down
+        assert!(c.should_swallow(&key_event(0x04, true)));
+        c.return_to_local(); // it lets go of A (release_all); the person's finger is still on it
+
+        // Applications here never saw A go down: no repeats, no release.
+        c.handle(&key_event(0x04, true));
+        assert!(c.should_swallow(&key_event(0x04, true)));
+        c.handle(&key_event(0x04, false));
+        assert!(c.should_swallow(&key_event(0x04, false)));
+        // The next press is theirs again.
+        c.handle(&key_event(0x04, true));
+        assert!(!c.should_swallow(&key_event(0x04, true)));
+        assert_eq!(rec.order().last(), Some(&"leave"));
+    }
+
+    #[test]
+    fn keys_pressed_during_a_session_without_key_sharing_are_tracked_as_local() {
+        let (c, rec) = controller(vec![LAPTOP, MONITOR_ABOVE], Side::Right, false);
+        c.handle_motion(p(1511.0, 500.0), p(6.0, 0.0));
+        rec.clear_sent();
+        c.handle(&key_event(0x04, true)); // typed here while the mouse is over there
+        assert!(!c.should_swallow(&key_event(0x04, true)));
+        c.return_to_local();
+        c.handle(&key_event(0x04, false));
+        assert!(!c.should_swallow(&key_event(0x04, false)));
+        assert_eq!(rec.sent(), vec![]);
     }
 
     #[test]

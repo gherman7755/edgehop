@@ -7,14 +7,17 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use edgehop_input::{CaptureHandle, CaptureSink, MotionMapper, Platform, PlatformError};
-use edgehop_proto::MonitorInfo;
+use edgehop_input::{
+    CaptureHandle, CaptureSink, MotionMapper, PanicGuard, Platform, PlatformError,
+};
+use edgehop_proto::{is_panic_chord, MonitorInfo};
 use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
 
 use crate::capture::{Capture, CaptureCallbacks};
 use crate::displays::list_monitors;
 use crate::dpi::ensure_dpi_aware;
+use crate::keyboard::KeySubscription;
 use crate::output::WinOutput;
 
 #[derive(Debug, Default)]
@@ -58,7 +61,8 @@ impl Platform for WinPlatform {
         let motion_mapper = Arc::clone(&mapper);
         let motion_sink = Arc::clone(&sink);
         let event_sink = Arc::clone(&sink);
-        let swallow_sink = sink;
+        let swallow_sink = Arc::clone(&sink);
+        let key_sink = sink;
         let capture = Capture::start(CaptureCallbacks {
             on_motion: Box::new(move |motion| {
                 let (position, delta) =
@@ -69,15 +73,41 @@ impl Platform for WinPlatform {
             should_swallow: Box::new(move |event| swallow_sink.should_swallow(event)),
         })
         .map_err(|error| PlatformError(error.to_string()))?;
+        // Keys are always watched while controlling, even when they are not shared: the panic chord must work.
+        let keys = KeySubscription::new(Arc::new(move |event| {
+            key_sink.event(event);
+            key_sink.should_swallow(&event)
+        }))
+        .map_err(|error| PlatformError(error.to_string()))?;
         Ok(Arc::new(WinCapture {
             capture: Mutex::new(Some(capture)),
+            keys: Mutex::new(Some(keys)),
             mapper,
         }))
     }
+
+    fn watch_panic(
+        &self,
+        on_panic: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Box<dyn PanicGuard>, PlatformError> {
+        let subscription = KeySubscription::new(Arc::new(move |event| {
+            if is_panic_chord(&event) {
+                on_panic();
+            }
+            false // the receiver never keeps keys from the person sitting at it
+        }))
+        .map_err(|error| PlatformError(error.to_string()))?;
+        Ok(Box::new(WinPanicGuard(subscription)))
+    }
 }
+
+struct WinPanicGuard(#[allow(dead_code)] KeySubscription);
+
+impl PanicGuard for WinPanicGuard {}
 
 struct WinCapture {
     capture: Mutex<Option<Capture>>,
+    keys: Mutex<Option<KeySubscription>>,
     mapper: Arc<MotionMapper>,
 }
 
@@ -136,7 +166,14 @@ impl CaptureHandle for WinCapture {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
+        let keys = self
+            .keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         self.mapper.leave_remote();
-        drop(capture); // joins the capture thread: never hold a lock the hook callbacks need
+        // Both join their hook thread: never hold a lock the hook callbacks need.
+        drop(capture);
+        drop(keys);
     }
 }
