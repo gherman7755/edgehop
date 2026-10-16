@@ -16,6 +16,16 @@ export function CoreBanner({ state, actions }: { state: AppState; actions: EdgeH
 	);
 }
 
+export function PeerWarningBanner({ state }: { state: AppState }) {
+	if (!state.peerWarning || state.controller.state !== 'connected') return null;
+	return (
+		<div className="banner warn" role="alert">
+			<strong>The other computer cannot apply your input</strong>
+			<span className="hint">{state.peerWarning}</span>
+		</div>
+	);
+}
+
 export function PermissionsBanner({ state, actions }: { state: AppState; actions: EdgeHop['actions'] }) {
 	const permissions = state.permissions;
 	if (state.core.state !== 'running' || state.core.info.platform !== 'macos' || !permissions) return null;

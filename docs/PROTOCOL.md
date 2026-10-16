@@ -65,6 +65,10 @@ at (0,0). The controller uses the monitor at (0,0) as the remote screen size.
 read: keys must not be sent to it, and its keys must be dropped. Mouse and scroll work either way. Unknown fields
 are ignored, so older computers are unaffected.
 
+`inputBlocked` (optional bool, in the receiver's hello): `true` means the receiver is connected but cannot apply
+input right now (on macOS: no Accessibility permission). Absent means it can. The controller tells its user
+instead of leaving a cursor that silently does not move.
+
 ## Input frames (type 3), fixed 16-byte records
 | Offset | Meaning |
 |---|---|
