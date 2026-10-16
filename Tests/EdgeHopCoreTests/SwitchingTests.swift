@@ -204,6 +204,62 @@ private func makeController(
         #expect(c.mode == .local)
     }
 
+    private func key(_ code: UInt16, _ isDown: Bool) -> InputEvent { .key(code: code, isDown: isDown, modifiers: []) }
+
+    @Test func aKeyHeldBeforeCrossingIsReleasedHereAndNeverForwarded() {
+        let rec = Recorder()
+        let c = makeController(rec, forwardKeys: true)
+        let shift: UInt16 = 0xE1
+        c.handle(key(shift, true))
+        #expect(!c.shouldSwallow(key(shift, true)))
+        c.handleMotion(position: Point(x: 1511, y: 500), delta: Point(x: 6, y: 0))
+        rec.sent.removeAll()
+
+        c.handle(key(shift, true)) // a repeat
+        #expect(c.shouldSwallow(key(shift, true)))
+        c.handle(key(shift, false)) // the release must reach this computer's applications
+        #expect(!c.shouldSwallow(key(shift, false)))
+        #expect(rec.sent.isEmpty)
+
+        c.handle(key(0x04, true))
+        #expect(c.shouldSwallow(key(0x04, true)))
+        c.handle(key(0x04, false))
+        #expect(c.shouldSwallow(key(0x04, false)))
+        #expect(rec.sent == [key(0x04, true), key(0x04, false)])
+        c.handle(key(shift, true)) // released, so an ordinary key again
+        #expect(c.shouldSwallow(key(shift, true)))
+        #expect(rec.sent.last == key(shift, true))
+    }
+
+    @Test func aKeyStillDownWhenControlComesBackStaysHiddenUntilReleased() {
+        let rec = Recorder()
+        let c = makeController(rec, forwardKeys: true)
+        c.handleMotion(position: Point(x: 1511, y: 500), delta: Point(x: 6, y: 0))
+        c.handle(key(0x04, true))
+        #expect(c.shouldSwallow(key(0x04, true)))
+        c.returnToLocal()
+
+        c.handle(key(0x04, true))
+        #expect(c.shouldSwallow(key(0x04, true)))
+        c.handle(key(0x04, false))
+        #expect(c.shouldSwallow(key(0x04, false)))
+        c.handle(key(0x04, true))
+        #expect(!c.shouldSwallow(key(0x04, true)))
+    }
+
+    @Test func keysPressedDuringASessionWithoutKeySharingAreTrackedAsLocal() {
+        let rec = Recorder()
+        let c = makeController(rec, forwardKeys: false)
+        c.handleMotion(position: Point(x: 1511, y: 500), delta: Point(x: 6, y: 0))
+        rec.sent.removeAll()
+        c.handle(key(0x04, true))
+        #expect(!c.shouldSwallow(key(0x04, true)))
+        c.returnToLocal()
+        c.handle(key(0x04, false))
+        #expect(!c.shouldSwallow(key(0x04, false)))
+        #expect(rec.sent.isEmpty)
+    }
+
     @Test func crossesAgainAfterReturning() {
         let rec = Recorder()
         let c = makeController(rec)

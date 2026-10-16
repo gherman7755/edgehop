@@ -64,6 +64,14 @@ public final class SwitchController {
     private var state: Mode = .local
     /// Buttons held, in either mode: while one is, neither computer is left (the release would go astray).
     private var buttonsDown = 0
+    /// Keys held down on this computer (applications saw their presses). Their releases must reach local applications
+    /// even after control moved to the other computer, or they would stay pressed here.
+    private var localKeys = Set<UInt16>()
+    /// Keys whose press was forwarded to the other computer and that are still down.
+    private var remoteKeys = Set<UInt16>()
+    /// Keys still held after control came back from a remote press: local applications never saw the press, so they
+    /// must not see the repeats or the release either.
+    private var suppressed = Set<UInt16>()
     /// The remote cursor has come `armDistance` away from the edge it entered at, so a return is allowed.
     private var armed = false
     private var lastLocalPosition = Point(x: 0, y: 0)
@@ -150,12 +158,23 @@ public final class SwitchController {
         switch (state, event) {
         case let (.local, .mouseButton(_, isDown)):
             buttonsDown = max(0, buttonsDown + (isDown ? 1 : -1))
+        case let (.local, .key(code, isDown, _)):
+            // A key that is still down from a remote press is not ours to track: applications never saw it.
+            if !suppressed.contains(code) { trackLocalKey(code, isDown: isDown) }
         case (.local, _):
             break
         case (.remote, .mouseMoveAbsolute), (.remote, .mouseMoveDelta):
             break // motion goes through handleMotion
-        case (.remote, .key):
-            if forwardKeys { actions.send(event) }
+        case let (.remote, .key(code, isDown, _)):
+            if !forwardKeys {
+                trackLocalKey(code, isDown: isDown) // keys keep working here
+            } else if !localKeys.contains(code) {
+                // Pressed on the other computer: forward it and remember it until it is released.
+                if isDown { remoteKeys.insert(code) } else { remoteKeys.remove(code) }
+                actions.send(event)
+            }
+            // else: held since before control moved. The other computer never saw it go down, so neither its
+            // repeats nor its release are sent; the release goes to local applications (shouldSwallow).
         case let (.remote, .mouseButton(_, isDown)):
             buttonsDown = max(0, buttonsDown + (isDown ? 1 : -1))
             actions.send(event)
@@ -168,9 +187,20 @@ public final class SwitchController {
         lock.lock(); defer { lock.unlock() }
         switch state {
         case .remote:
-            if case .key = event { return forwardKeys } // keys keep working locally unless they are forwarded
+            // Keys keep working locally unless they are forwarded, and a key held since before control moved must
+            // still be released here.
+            guard case let .key(code, isDown, _) = event else { return true }
+            if !forwardKeys { return false }
+            if localKeys.contains(code) {
+                if !isDown { localKeys.remove(code) }
+                return isDown // repeats are swallowed, the release is let through
+            }
             return true
         case .local:
+            if case let .key(code, isDown, _) = event, suppressed.contains(code) {
+                if !isDown { suppressed.remove(code) }
+                return true
+            }
             // The move that brought us back must not reach apps: its location predates the warp.
             if swallowTransitionMove, isMove(event) {
                 swallowTransitionMove = false
@@ -248,7 +278,15 @@ public final class SwitchController {
         }
     }
 
+    private func trackLocalKey(_ code: UInt16, isDown: Bool) {
+        if isDown { localKeys.insert(code) } else { localKeys.remove(code) }
+    }
+
     private func leave(at position: Point, swallowCurrentMove: Bool) {
+        // Keys still down from a remote press: the other computer lets go (release_all), and here nothing about them
+        // is shown to applications until they are released.
+        suppressed.formUnion(remoteKeys)
+        remoteKeys.removeAll()
         state = .local
         cursor = nil
         origin = nil
