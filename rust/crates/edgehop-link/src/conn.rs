@@ -23,14 +23,16 @@ pub(crate) fn now_millis() -> u64 {
 /// Serialises writes from several threads onto one socket, encrypting each frame on the way (the handshake has
 /// already happened).
 pub(crate) struct FrameWriter {
-    stream: Mutex<TcpStream>,
+    /// `None` once shut down: the write half's handle is then closed, so the socket is fully released as soon as the
+    /// reading side lets go of its own handle.
+    stream: Mutex<Option<TcpStream>>,
     sealer: Mutex<Sealer>,
 }
 
 impl FrameWriter {
     pub(crate) fn new(stream: TcpStream, sealer: Sealer) -> Self {
         Self {
-            stream: Mutex::new(stream),
+            stream: Mutex::new(Some(stream)),
             sealer: Mutex::new(sealer),
         }
     }
@@ -39,15 +41,23 @@ impl FrameWriter {
         let bytes =
             encode_frame(frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         // The stream lock is held while sealing, so the order on the wire is the order of the nonces.
-        let mut stream = lock(&self.stream);
+        let mut guard = lock(&self.stream);
+        let Some(stream) = guard.as_mut() else {
+            return Err(io::Error::from(io::ErrorKind::NotConnected));
+        };
         let sealed = lock(&self.sealer)
             .seal(&bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         stream.write_all(&sealed)
     }
 
+    /// Closes the connection. The shutdown is not trusted to be enough on its own: on Windows it has been seen to
+    /// fail with "not connected" and then no FIN reached the other side, so the handle is closed too, and the
+    /// reader's handle goes with its thread within one wake-up.
     pub(crate) fn shutdown(&self) {
-        let _ = lock(&self.stream).shutdown(Shutdown::Both);
+        if let Some(stream) = lock(&self.stream).take() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     }
 }
 
