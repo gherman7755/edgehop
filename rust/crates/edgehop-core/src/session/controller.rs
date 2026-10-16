@@ -271,6 +271,20 @@ impl CaptureSink for Sink {
 
     fn event(&self, event: InputEvent) {
         if let Some(controller) = &self.controller {
+            if let (Some(diagnostics), InputEvent::MouseButton { button, is_down }) =
+                (&self.diagnostics, &event)
+            {
+                // Before `handle`, so the mode shown is the one the button was pressed in.
+                log(
+                    &diagnostics.events,
+                    Source::Controller,
+                    format!(
+                        "button {button:?} {} while {:?}",
+                        if *is_down { "down" } else { "up" },
+                        controller.mode()
+                    ),
+                );
+            }
             controller.handle(&event);
             return;
         }
