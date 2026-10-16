@@ -8,25 +8,7 @@ use thiserror::Error;
 use crate::ipc::Emitter;
 
 /// Where the other computer sits relative to this one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
-    Left,
-    Right,
-    Top,
-    Bottom,
-}
-
-impl Side {
-    pub fn parse(text: &str) -> Option<Self> {
-        match text {
-            "left" => Some(Self::Left),
-            "right" => Some(Self::Right),
-            "top" => Some(Self::Top),
-            "bottom" => Some(Self::Bottom),
-            _ => None,
-        }
-    }
-}
+pub use edgehop_switch::Side;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {

@@ -57,6 +57,11 @@ dependencies = [
 name = "edgehop-core"
 version = "0.1.0"
 dependencies = [
+ "edgehop-input",
+ "edgehop-link",
+ "edgehop-proto",
+ "edgehop-switch",
+ "edgehop-win",
  "getrandom",
  "serde_json",
  "thiserror",

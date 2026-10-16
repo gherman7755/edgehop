@@ -101,7 +101,7 @@ scripts/golden-vectors.sh gen > rust/crates/edgehop-proto/tests/golden.json   # 
 scripts/golden-vectors.sh scenarios > rust/crates/edgehop-switch/tests/scenarios.json   # regenerate if the Swift switching logic changes
 
 (cd rust && cargo build -p edgehop-core)
-node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core --stub              # "--platform windows" on Windows
+node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core --stub              # on Windows: --platform windows --loopback
 node scripts/ipc-conformance.mjs .build/debug/edgehop-core rust/target/debug/edgehop-core
 scripts/check-link-interop.sh                       # Rust controller <-> Swift receiver and Swift controller <-> Rust receiver
 ```
@@ -110,10 +110,11 @@ requires the two cores to answer 43 requests (errors included) identically. The 
 same way: Swift runs 22 scripted and pseudo-random scenarios (2,420 steps) through its real `SwitchController` and
 records every action, and the Rust controller must produce the identical trace.
 
-The Rust core's session backend is a stub for now: every IPC method works, but starting a controller or receiver
-returns an `internal` error. The pieces to replace it exist: the TCP link (`edgehop-link`), the input layer
-(`edgehop-input` and `edgehop-win`) and the edge-switching controller (`edgehop-switch`). Joining them into receiver
-and controller sessions behind the IPC is what is left.
+On Windows the Rust core runs real sessions: `edgehop-core`'s `SessionBackend` joins the TCP link, the input layer
+and the edge switching on top of a small `Platform` trait (`edgehop-input`), implemented for Windows by
+`edgehop-win`. Its tests run a receiver and a controller against each other over real TCP with a fake operating
+system, and the Windows CI job does the same through the IPC with the real hook and `SendInput`. On other platforms
+the Rust core still uses the stub (starting a session returns an `internal` error); the Swift core is the macOS one.
 
 ## Two-Mac test (M4)
 
@@ -160,8 +161,9 @@ Everything is unencrypted: do it on a trusted network, with keys off.
    directions) and the core process speaking the IPC (28 tests, stub session backend, identical to the Swift core
    on 43 conformance requests); TCP link crate (13 loopback tests, interoperates with the Swift link both ways).
    Windows input layer (injection verified on a real Windows runner); edge-switching controller ported to Rust and
-   proven identical to the Swift one on recorded scenarios. Next: the session backend that joins link, input and
-   switching, then the Electron UI.
+   proven identical to the Swift one on recorded scenarios. Session backend joining them (`SessionBackend`, tested end to end
+   over loopback with fakes) and its Windows platform adapter. Next: confirm it on two real computers, then the
+   Electron UI. Still missing in the Rust core: discovery, keyboard, encryption.
 7. ⬜ **M6 security:** Noise XX (X25519, ChaChaPoly, SHA256) with pinned static keys + 6-digit SAS pairing.
    Use a vetted Noise implementation or test vectors; do not hand-roll without vectors.
 8. ⬜ **M7 keymap:** neutral key table (HID usage or VK) <-> macOS keycodes, modifier handling.

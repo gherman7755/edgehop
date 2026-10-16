@@ -11,6 +11,13 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+edgehop-input = { path = "../edgehop-input" }
+edgehop-link = { path = "../edgehop-link" }
+edgehop-proto = { path = "../edgehop-proto" }
+edgehop-switch = { path = "../edgehop-switch" }
 getrandom = "0.3.4"
 serde_json = "1.0.154"
 thiserror = "2.0.21"
+
+[target."cfg(windows)".dependencies]
+edgehop-win = { path = "../edgehop-win" }

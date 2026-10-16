@@ -76,7 +76,7 @@ jobs:
       - name: Build the core
         if: runner.os == 'Windows'
         run: cargo build -p edgehop-core
-      - name: IPC smoke test of the Rust core on Windows
+      - name: IPC smoke test of the Rust core on Windows (real sessions, receiver and controller on loopback)
         if: runner.os == 'Windows'
         working-directory: .
-        run: node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core.exe --platform windows --stub
+        run: node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core.exe --platform windows --loopback

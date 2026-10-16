@@ -1,9 +1,11 @@
 // End-to-end check of the core IPC (docs/IPC.md) from a real client, the way the Electron UI will use it.
 // Works against any core (Swift on macOS, Rust on Windows).
-//   node scripts/ipc-smoke.mjs [path/to/edgehop-core] [--platform macos|windows] [--stub]
+//   node scripts/ipc-smoke.mjs [path/to/edgehop-core] [--platform macos|windows] [--stub] [--loopback]
 // --stub: the core has no session backend yet (the Rust core until its network layer exists), so starting a
 // session must fail with `internal` instead of producing connection events.
-// Starts no listener and needs no permissions: it uses an unreachable address to exercise events.
+// --loopback: also run a receiver and a controller inside the core against each other over 127.0.0.1. This
+// installs the real input capture, so it is for a machine where that is allowed (the Windows CI runner).
+// Otherwise it starts no listener and needs no permissions: it uses an unreachable address to exercise events.
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
@@ -14,6 +16,7 @@ const option = name => {
 };
 const platform = option('--platform') ?? 'macos';
 const stub = argv.includes('--stub');
+const loopback = argv.includes('--loopback');
 const bin = argv.find((a, i) => !a.startsWith('--') && argv[i - 1] !== '--platform') ?? '.build/debug/edgehop-core';
 let failures = 0;
 const check = (ok, label, extra = '') => {
@@ -99,6 +102,25 @@ try {
 		const failed = events.find(e => e.event === 'controller.state' && e.data.state === 'failed');
 		check(typeof failed?.data.message === 'string' && failed.data.message.length > 0, 'failure carries a readable message', failed?.data.message);
 		check(events.some(e => e.event === 'log' && e.data.source === 'controller'), 'event: log lines arrive');
+	}
+
+	if (loopback) {
+		const mark = events.length;
+		const seen = (name, test) => events.slice(mark).some(e => e.event === name && test(e.data));
+		const receiver = await request('receiver.start', { token: token.result.token, port: 0 });
+		const port = receiver.result?.port;
+		check(Number.isInteger(port) && port > 0, 'receiver.start on a free port', JSON.stringify(receiver));
+		check(await until(() => seen('receiver.state', d => d.state === 'listening' && d.port === port), 2000), 'event: receiver.state listening');
+		const start = await request('controller.start', { token: token.result.token, host: '127.0.0.1', port, switching: true });
+		check(start.result !== undefined && !start.error, 'controller.start to the local receiver', JSON.stringify(start));
+		check(await until(() => seen('controller.state', d => d.state === 'connected' && d.remoteActive === false), 5000), 'event: controller.state connected', JSON.stringify(events.slice(mark)));
+		check(await until(() => seen('receiver.state', d => d.state === 'connected'), 2000), 'event: receiver.state connected');
+		const stop = await request('controller.stop');
+		check(stop.result !== undefined, 'controller.stop answered');
+		check((await request('controller.state')).result?.state === 'idle', 'controller is idle after stop');
+		check(await until(() => events.slice(mark).filter(e => e.event === 'receiver.state').at(-1)?.data.state === 'listening', 2000), 'receiver listens again after the controller left');
+		await request('receiver.stop');
+		check((await request('receiver.state')).result?.state === 'stopped', 'receiver stopped');
 	}
 
 	const shutdown = await request('core.shutdown');
