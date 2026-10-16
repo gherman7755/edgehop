@@ -37,6 +37,30 @@ jobs:
         run: |
           scripts/golden-vectors.sh scenarios > "$RUNNER_TEMP/scenarios.json"
           cmp "$RUNNER_TEMP/scenarios.json" rust/crates/edgehop-switch/tests/scenarios.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: UI dependencies
+        working-directory: ui
+        run: npm ci
+      - name: UI type-check
+        working-directory: ui
+        run: npm run typecheck
+      - name: UI tests (including the real Swift core)
+        working-directory: ui
+        run: npm test
+      - name: UI build
+        working-directory: ui
+        run: npm run build
+      - name: UI smoke test (the real Electron app, a throw-away profile, the real Swift core)
+        working-directory: ui
+        timeout-minutes: 3
+        env:
+          EDGEHOP_SMOKE: "1"
+          EDGEHOP_USER_DATA: ${{ runner.temp }}/edgehop-ui-profile
+        run: npx electron .
 
   rust:
     name: Rust (${{ matrix.os }})
@@ -80,3 +104,32 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: .
         run: node scripts/ipc-smoke.mjs rust/target/debug/edgehop-core.exe --platform windows --loopback
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: UI dependencies
+        working-directory: ui
+        env:
+          # Only the Windows job runs the app; Linux just type-checks and runs the unit tests.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ${{ runner.os == 'Linux' && '1' || '' }}
+        run: npm ci
+      - name: UI type-check
+        working-directory: ui
+        run: npm run typecheck
+      - name: UI tests (on Windows including the real Rust core)
+        working-directory: ui
+        run: npm test
+      - name: UI build
+        if: runner.os == 'Windows'
+        working-directory: ui
+        run: npm run build
+      - name: UI smoke test (the real Electron app, a throw-away profile, the real Rust core)
+        if: runner.os == 'Windows'
+        working-directory: ui
+        timeout-minutes: 3
+        env:
+          EDGEHOP_SMOKE: "1"
+          EDGEHOP_USER_DATA: ${{ runner.temp }}\edgehop-ui-profile
+        run: npx electron .
