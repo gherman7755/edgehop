@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use edgehop_input::{Injector, Platform};
+use edgehop_input::{Injector, PanicGuard, Platform};
 use edgehop_link::{LinkServer, ServerConfig, ServerHandler};
 use edgehop_proto::{ControlMessage, HelloMessage, InputEvent};
 
@@ -109,6 +109,8 @@ struct Run<P: Platform> {
     handler: Arc<Handler<P>>,
     events: Events,
     state: Arc<Tracked<ReceiverState>>,
+    /// Watches for the panic chord while listening; dropped (and so stopped) with the run.
+    _panic: Option<Box<dyn PanicGuard>>,
 }
 
 impl<P: Platform> Run<P> {
@@ -125,7 +127,7 @@ impl<P: Platform> Run<P> {
 pub(super) struct ReceiverSessions<P: Platform> {
     platform: Arc<P>,
     state: Arc<Tracked<ReceiverState>>,
-    run: Mutex<Option<Run<P>>>,
+    run: Arc<Mutex<Option<Run<P>>>>,
 }
 
 impl<P: Platform> ReceiverSessions<P> {
@@ -133,7 +135,7 @@ impl<P: Platform> ReceiverSessions<P> {
         Self {
             platform,
             state: Arc::new(Tracked::new(ReceiverState::Stopped)),
-            run: Mutex::new(None),
+            run: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -195,11 +197,40 @@ impl<P: Platform> ReceiverSessions<P> {
         self.state.set(ReceiverState::Listening { port }, |s| {
             events.receiver_state(s)
         });
+        // The person at this computer can always stop being controlled by typing the panic chord.
+        let panic_run = Arc::clone(&self.run);
+        let panic_events = events.clone();
+        let guard = self.platform.watch_panic(Box::new(move || {
+            let run = Arc::clone(&panic_run);
+            let events = panic_events.clone();
+            // Stopping joins the keyboard thread this runs on: do it elsewhere.
+            let _ = std::thread::Builder::new()
+                .name("edgehop-receiver-panic".into())
+                .spawn(move || {
+                    log(&events, Source::Receiver, "panic chord: stopping");
+                    let taken = run.lock().unwrap_or_else(PoisonError::into_inner).take();
+                    if let Some(taken) = taken {
+                        taken.stop();
+                    }
+                });
+        }));
+        let guard = match guard {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                log(
+                    &events,
+                    Source::Receiver,
+                    format!("WARNING: no local panic chord ({error})"),
+                );
+                None
+            }
+        };
         *slot = Some(Run {
             server,
             handler,
             events,
             state: Arc::clone(&self.state),
+            _panic: guard,
         });
         Ok(port)
     }

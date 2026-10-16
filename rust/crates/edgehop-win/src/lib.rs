@@ -16,12 +16,14 @@
 mod capture;
 mod displays;
 mod dpi;
+mod keyboard;
 mod output;
 mod platform;
 
 pub use capture::{Capture, CaptureCallbacks, CaptureError, Motion};
 pub use displays::list_monitors;
 pub use dpi::ensure_dpi_aware;
+pub use keyboard::{KeyCallback, KeySubscription};
 pub use output::WinOutput;
 pub use platform::WinPlatform;
 

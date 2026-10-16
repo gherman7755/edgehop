@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use edgehop_input::{CaptureHandle, CaptureSink, Platform};
 use edgehop_link::{ClientConfig, ClientHandler, LinkClient, LinkError};
-use edgehop_proto::{ControlMessage, InputEvent, MonitorInfo};
+use edgehop_proto::{is_panic_chord, ControlMessage, InputEvent, MonitorInfo};
 use edgehop_switch::{Actions, Mode, Point, Rect, SwitchController};
 
 use super::{log, Tracked};
@@ -184,6 +184,8 @@ struct Sink {
     client: Arc<LinkClient>,
     forward_keys: bool,
     last_position: Mutex<Option<(f64, f64)>>,
+    /// The panic chord was typed: stop sharing. Runs in the capture thread, so it must only hand the work over.
+    on_panic: Box<dyn Fn() + Send + Sync>,
     /// Debug logging of the motion path: where the local cursor really is while control is remote, and how long
     /// the slowest call took (the hook has about 300 ms before Windows abandons it).
     diagnostics: Option<Diagnostics>,
@@ -270,6 +272,10 @@ impl CaptureSink for Sink {
     }
 
     fn event(&self, event: InputEvent) {
+        if is_panic_chord(&event) {
+            (self.on_panic)();
+            return; // the chord is for EdgeHop, not for either computer
+        }
         if let Some(controller) = &self.controller {
             if let (Some(diagnostics), InputEvent::MouseButton { button, is_down }) =
                 (&self.diagnostics, &event)
@@ -416,19 +422,23 @@ impl<P: Platform> ControllerSessions<P> {
     }
 
     pub(super) fn stop(&self) {
-        self.shared.generation.fetch_add(1, Ordering::SeqCst);
-        let events = self
-            .shared
-            .events
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let Some(events) = events else { return };
-        if let Some(run) = self.shared.take_run() {
-            run.teardown(&events);
-        }
-        self.shared.set_state(&events, ControllerState::Idle);
+        stop_session(&self.shared);
     }
+}
+
+/// Ends the session whatever its state: cancels a connection in progress, gives control back, goes idle.
+fn stop_session(shared: &Shared) {
+    shared.generation.fetch_add(1, Ordering::SeqCst);
+    let events = shared
+        .events
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let Some(events) = events else { return };
+    if let Some(run) = shared.take_run() {
+        run.teardown(&events);
+    }
+    shared.set_state(&events, ControllerState::Idle);
 }
 
 /// Connects, starts capturing and registers the session. An `Err` is the message to show the user.
@@ -539,6 +549,21 @@ fn run<P: Platform>(
         client: Arc::clone(&client),
         forward_keys,
         last_position: Mutex::new(None),
+        on_panic: {
+            let shared = Arc::clone(shared);
+            let events = events.clone();
+            Box::new(move || {
+                let shared = Arc::clone(&shared);
+                let events = events.clone();
+                // Stopping joins the capture thread this runs on: do it elsewhere.
+                let _ = thread::Builder::new()
+                    .name("edgehop-controller-panic".into())
+                    .spawn(move || {
+                        log(&events, Source::Controller, "panic chord: stopping");
+                        stop_session(&shared);
+                    });
+            })
+        },
         diagnostics: config.debug.then(|| Diagnostics {
             events: events.clone(),
             capture: Arc::clone(&capture_slot),

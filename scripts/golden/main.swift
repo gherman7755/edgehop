@@ -236,9 +236,10 @@ func randomSteps(count: Int, displays: [Rect], seed: UInt64) -> [[String: Any]] 
             steps.append(motion(x, y, Double(rng.pick(big)), Double(rng.pick(big))))
         case 55..<68: steps.append(handleStep(.mouseButton(rng.pick(buttons), isDown: rng.int(0...1) == 1)))
         case 68..<74: steps.append(handleStep(.scroll(horizontal: Int32(rng.int(-240...240)), vertical: Int32(rng.int(-240...240)))))
-        case 74..<80: steps.append(handleStep(.key(code: UInt16(rng.int(0...60)), isDown: rng.int(0...1) == 1, modifiers: Modifiers(rawValue: UInt8(rng.int(0...15))))))
+        case 74..<80: steps.append(handleStep(.key(code: UInt16(rng.int(0...12)), isDown: rng.int(0...1) == 1, modifiers: Modifiers(rawValue: UInt8(rng.int(0...15))))))
         case 80..<92:
-            let events: [InputEvent] = [.mouseMoveAbsolute(x: 3, y: 4), .mouseMoveDelta(dx: 1, dy: 1), .mouseButton(.left, isDown: true), .scroll(horizontal: 0, vertical: 120), .key(code: 5, isDown: true, modifiers: [])]
+            let keyDown = rng.int(0...1) == 1
+            let events: [InputEvent] = [.mouseMoveAbsolute(x: 3, y: 4), .mouseMoveDelta(dx: 1, dy: 1), .mouseButton(.left, isDown: true), .scroll(horizontal: 0, vertical: 120), .key(code: UInt16(rng.int(0...12)), isDown: keyDown, modifiers: [])]
             steps.append(swallowStep(rng.pick(events)))
         default: steps.append(["op": "return"])
         }
@@ -264,6 +265,15 @@ func generateScenarios() {
         motion(1511, 500, 6, 0), motion(1511, 500, -1, 0), motion(0, 0, 9, 0), motion(0, 0, -20, 0), motion(0, 0, 10, 0),
         handleStep(.mouseButton(.left, isDown: true)), motion(0, 0, -30, 0), motion(0, 0, -30, 0),
         handleStep(.mouseButton(.left, isDown: false)), motion(0, 0, -5, 0), swallowStep(.mouseMoveAbsolute(x: 1, y: 1)),
+    ]))
+    let keyDown = { (code: UInt16, isDown: Bool) in InputEvent.key(code: code, isDown: isDown, modifiers: []) }
+    out.append(runScenario(name: "held keys across the crossing", displays: [laptop], side: .right, remote: (1440, 900), forwardKeys: true, steps: [
+        handleStep(keyDown(0xE1, true)), swallowStep(keyDown(0xE1, true)), motion(1511, 500, 6, 0),
+        handleStep(keyDown(0xE1, true)), swallowStep(keyDown(0xE1, true)), handleStep(keyDown(0xE1, false)), swallowStep(keyDown(0xE1, false)),
+        handleStep(keyDown(4, true)), swallowStep(keyDown(4, true)), handleStep(keyDown(4, false)), swallowStep(keyDown(4, false)),
+        handleStep(keyDown(5, true)), swallowStep(keyDown(5, true)), ["op": "return"],
+        handleStep(keyDown(5, true)), swallowStep(keyDown(5, true)), handleStep(keyDown(5, false)), swallowStep(keyDown(5, false)),
+        handleStep(keyDown(5, true)), swallowStep(keyDown(5, true)),
     ]))
     out.append(runScenario(name: "keys forwarded", displays: [laptop], side: .left, remote: (1440, 900), forwardKeys: true, steps: [
         swallowStep(.key(code: 0, isDown: true, modifiers: [])), motion(0, 300, -6, 0), handleStep(.key(code: 0, isDown: true, modifiers: [.shift])),

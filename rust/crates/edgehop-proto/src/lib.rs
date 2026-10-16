@@ -18,7 +18,10 @@ pub use frame::{
     encode_frame, Frame, FrameDecoder, FrameError, FrameType, HEADER_SIZE, MAGIC, MAX_PAYLOAD,
 };
 pub use hello::{HelloMessage, MonitorInfo};
-pub use keymap::{hid_to_windows, modifier_for, windows_to_hid, WinKey, HID_ESCAPE, KEYMAP_NAME};
+pub use keymap::{
+    hid_to_windows, is_panic_chord, modifier_for, windows_key_to_hid, windows_to_hid, WinKey,
+    HID_ESCAPE, KEYMAP_NAME,
+};
 pub use ping::{ping_payload, rtt_millis};
 
 /// Default TCP port of a receiver.

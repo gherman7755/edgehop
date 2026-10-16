@@ -20,6 +20,81 @@ mod imp {
         (actual.0 - wanted.0).abs() <= 1.0 && (actual.1 - wanted.1).abs() <= 1.0
     }
 
+    /// F13 (HID 0x68, scan code 0x64).
+    const F13_HID: u16 = 0x68;
+    const F13_SCAN: u16 = 0x64;
+
+    fn raw_key(scan: u16, is_down: bool) {
+        use std::mem::size_of;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+            KEYEVENTF_SCANCODE,
+        };
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: 0,
+                    wScan: scan,
+                    dwFlags: KEYEVENTF_SCANCODE | if is_down { 0 } else { KEYEVENTF_KEYUP },
+                    time: 0,
+                    dwExtraInfo: 0, // not ours
+                },
+            },
+        };
+        // SAFETY: one fully initialised INPUT and its exact size.
+        unsafe {
+            SendInput(1, &input, size_of::<INPUT>() as i32);
+        }
+    }
+
+    fn keyboard_phase(check: &mut impl FnMut(bool, String)) {
+        use edgehop_proto::Modifiers;
+        use edgehop_win::KeySubscription;
+        use std::sync::Mutex;
+
+        let seen = Arc::new(Mutex::new(Vec::<InputEvent>::new()));
+        let recorder = Arc::clone(&seen);
+        let subscription = KeySubscription::new(Arc::new(move |event| {
+            recorder.lock().unwrap().push(event);
+            false
+        }));
+        check(subscription.is_ok(), "keyboard: the hook installs".into());
+        let Ok(_subscription) = subscription else {
+            return;
+        };
+
+        let mut ours = WinOutput::new();
+        ours.key(F13_HID, true, Modifiers::NONE);
+        ours.key(F13_HID, false, Modifiers::NONE);
+        std::thread::sleep(Duration::from_millis(300));
+        check(
+            seen.lock().unwrap().is_empty(),
+            "keyboard guard: keys we inject are ignored by our own hook".into(),
+        );
+
+        raw_key(F13_SCAN, true);
+        raw_key(F13_SCAN, false);
+        std::thread::sleep(Duration::from_millis(300));
+        let events = seen.lock().unwrap().clone();
+        let expected = vec![
+            InputEvent::Key {
+                code: F13_HID,
+                is_down: true,
+                modifiers: Modifiers::NONE,
+            },
+            InputEvent::Key {
+                code: F13_HID,
+                is_down: false,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        check(
+            events == expected,
+            format!("keyboard: a foreign F13 press was captured as HID 0x68 (saw {events:?})"),
+        );
+    }
+
     pub fn run() -> i32 {
         let live = std::env::args().any(|a| a == "--live");
         let mut failures = 0;
@@ -141,6 +216,11 @@ mod imp {
             ),
         );
         check(foreign.load(Ordering::SeqCst) == 0, "guard: none of them reached the capture callbacks (do not touch the mouse during the test)".into());
+
+        // Phase 3: the keyboard. F13 does nothing in any application. A key we inject is ignored by the hook (the
+        // feedback guard); the same key injected without our marker is captured, translated to its HID usage and
+        // can be kept from applications.
+        keyboard_phase(&mut check);
 
         if live {
             println!("Move the mouse, click and scroll for 10 seconds...");
