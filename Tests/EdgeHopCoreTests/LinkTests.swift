@@ -56,6 +56,23 @@ private final class Box<T> {
         #expect(peerKeymap.current == "hid")
     }
 
+    @Test func theReceiverAnnouncesThatItCannotApplyInput() throws {
+        let blocked = LinkServer(token: "loopback-secret-4", name: "srv")
+        blocked.isInputBlocked = { true }
+        try blocked.start(port: 0)
+        defer { blocked.stop() }
+        let client = LinkClient(token: "loopback-secret-4", name: "cli")
+        #expect(try client.connect(host: "127.0.0.1", port: blocked.port).inputBlocked == true)
+        client.close()
+
+        let ready = LinkServer(token: "loopback-secret-5", name: "srv")
+        try ready.start(port: 0)
+        defer { ready.stop() }
+        let other = LinkClient(token: "loopback-secret-5", name: "cli")
+        #expect(try other.connect(host: "127.0.0.1", port: ready.port).inputBlocked == nil)
+        other.close()
+    }
+
     @Test func rejectsAWrongToken() throws {
         let server = LinkServer(token: "the-real-token-1", name: "srv")
         let got = Box(0)
@@ -113,6 +130,13 @@ private final class Box<T> {
         let hello = HelloMessage(name: "mac", accepted: true, monitors: [MonitorInfo(id: "d1", x: 0, y: 0, width: 1920, height: 1080)])
         let decoded = try JSONDecoder().decode(HelloMessage.self, from: JSONEncoder().encode(hello))
         #expect(decoded == hello)
+    }
+
+    @Test func helloOmitsInputBlockedUnlessSet() throws {
+        let plain = String(decoding: try JSONEncoder().encode(HelloMessage(name: "mac")), as: UTF8.self)
+        #expect(!plain.contains("inputBlocked"))
+        let blocked = String(decoding: try JSONEncoder().encode(HelloMessage(name: "mac", inputBlocked: true)), as: UTF8.self)
+        #expect(blocked.contains("\"inputBlocked\":true"))
     }
 
     @Test func panicChordNeedsAllThreeModifiersAndEscapeDown() {

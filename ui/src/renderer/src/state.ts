@@ -19,6 +19,8 @@ export interface LogLine {
 export interface AppState {
 	core: CoreStatus;
 	controller: ControllerState;
+	/** The other computer is connected but told us it cannot apply input; cleared when the session ends. */
+	peerWarning: string | null;
 	receiver: ReceiverState;
 	latency: number | null;
 	peers: Peer[];
@@ -40,6 +42,7 @@ export const MAX_LOG_LINES = 500;
 export const initialState: AppState = {
 	core: { state: 'starting' },
 	controller: { state: 'idle' },
+	peerWarning: null,
 	receiver: { state: 'stopped' },
 	latency: null,
 	peers: [],
@@ -76,7 +79,7 @@ export function reducer(state: AppState, action: Action): AppState {
 		case 'core-status': {
 			if (action.status.state === 'exited') {
 				// Nothing is running any more, whatever the last events said.
-				return { ...state, core: action.status, controller: { state: 'idle' }, receiver: { state: 'stopped' }, latency: null };
+				return { ...state, core: action.status, controller: { state: 'idle' }, peerWarning: null, receiver: { state: 'stopped' }, latency: null };
 			}
 			return { ...state, core: action.status };
 		}
@@ -84,7 +87,15 @@ export function reducer(state: AppState, action: Action): AppState {
 			const { event } = action;
 			switch (event.event) {
 				case 'controller.state':
-					return { ...state, controller: event.data, latency: event.data.state === 'idle' ? null : state.latency, startError: null };
+					return {
+						...state,
+						controller: event.data,
+						latency: event.data.state === 'idle' ? null : state.latency,
+						peerWarning: event.data.state === 'connected' ? state.peerWarning : null,
+						startError: null,
+					};
+				case 'controller.warning':
+					return { ...state, peerWarning: event.data.message };
 				case 'receiver.state':
 					return { ...state, receiver: event.data, startError: null };
 				case 'latency':

@@ -527,6 +527,14 @@ fn run<P: Platform>(
         Source::Controller,
         format!("connected to \"{}\" {}", hello.name, size_text(&monitors)),
     );
+    if hello.is_input_blocked() {
+        let message = format!(
+            "\"{}\" is connected but cannot apply input: its EdgeHop lacks a permission (on a Mac: Accessibility). Fix it there and restart EdgeHop on that computer.",
+            hello.name
+        );
+        log(events, Source::Controller, format!("WARNING: {message}"));
+        events.controller_warning(&message);
+    }
 
     let capture_slot: Arc<OnceLock<Arc<dyn CaptureHandle>>> = Arc::new(OnceLock::new());
     let controller = if config.switching {

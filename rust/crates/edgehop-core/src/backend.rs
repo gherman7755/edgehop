@@ -129,6 +129,12 @@ impl Events {
         self.0.emit("receiver.state", state.to_json());
     }
 
+    /// The other computer connected but cannot apply our input (docs/IPC.md, `controller.warning`).
+    pub fn controller_warning(&self, message: &str) {
+        self.0
+            .emit("controller.warning", json!({"message": message}));
+    }
+
     pub fn latency(&self, millis: f64) {
         self.0.emit("latency", json!({"ms": millis}));
     }

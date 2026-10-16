@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { isSimulated } from './bridge';
-import { CoreBanner, PermissionsBanner } from './components/Banners';
+import { CoreBanner, PeerWarningBanner, PermissionsBanner } from './components/Banners';
 import { ControllerPanel } from './components/ControllerPanel';
 import { Header } from './components/Header';
 import { LogPanel } from './components/LogPanel';
@@ -23,6 +23,7 @@ export function App() {
 			<main className="main">
 				<CoreBanner state={state} actions={actions} />
 				<PermissionsBanner state={state} actions={actions} />
+				<PeerWarningBanner state={state} />
 				{state.core.state === 'running' && state.settingsLoaded ? (
 					<>
 						<Segmented

@@ -1387,3 +1387,52 @@ fn an_unknown_name_and_a_platform_without_discovery_are_told_apart() {
         Err(BackendError::Unsupported(_))
     ));
 }
+
+#[test]
+fn a_receiver_that_cannot_apply_input_is_reported_to_the_controller() {
+    use edgehop_link::{LinkServer, ServerConfig, ServerHandler};
+    struct Silent;
+    impl ServerHandler for Silent {}
+
+    let mut server_config = ServerConfig::new(TOKEN, "locked-down Mac");
+    server_config.port = 0;
+    server_config.bind = "127.0.0.1".parse().unwrap();
+    server_config.input_blocked = true;
+    server_config.monitors = vec![MonitorInfo {
+        id: "m0".into(),
+        x: 0.0,
+        y: 0.0,
+        width: 800.0,
+        height: 600.0,
+    }];
+    let server = LinkServer::start(server_config, Arc::new(Silent)).unwrap();
+
+    let backend = SessionBackend::new(FakePlatform::new("controller-pc", 1000.0, 800.0));
+    let (events, buffer) = events();
+    backend
+        .start_controller(
+            ControllerConfig {
+                target: Target::Host {
+                    host: "127.0.0.1".into(),
+                    port: server.port(),
+                },
+                token: TOKEN.into(),
+                side: Side::Right,
+                switching: true,
+                forward_keys: false,
+                debug: false,
+            },
+            events,
+        )
+        .unwrap();
+    wait_until("the warning", || {
+        !buffer.events("controller.warning").is_empty()
+    });
+    let warning = buffer.events("controller.warning")[0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(warning.contains("locked-down Mac"), "{warning}");
+    assert!(warning.contains("Accessibility"), "{warning}");
+    backend.stop_controller();
+}

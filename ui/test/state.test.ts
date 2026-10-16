@@ -20,6 +20,17 @@ describe('reducer', () => {
 		expect(state.receiver).toEqual({ state: 'listening', port: 47474 });
 	});
 
+	it('shows the warning of a peer that cannot apply input only for the session it came with', () => {
+		let state = reducer(running(), { type: 'event', event: { event: 'controller.state', data: { state: 'connecting' } }, now: 1 });
+		state = reducer(state, { type: 'event', event: { event: 'controller.warning', data: { message: 'Mac cannot apply input' } }, now: 2 });
+		state = reducer(state, { type: 'event', event: { event: 'controller.state', data: { state: 'connected', peer: 'Mac', remoteActive: false } }, now: 3 });
+		expect(state.peerWarning).toBe('Mac cannot apply input');
+		state = reducer(state, { type: 'event', event: { event: 'controller.state', data: { state: 'connected', peer: 'Mac', remoteActive: true } }, now: 4 });
+		expect(state.peerWarning).toBe('Mac cannot apply input');
+		state = reducer(state, { type: 'event', event: { event: 'controller.state', data: { state: 'idle' } }, now: 5 });
+		expect(state.peerWarning).toBeNull();
+	});
+
 	it('resets everything to idle when the core exits', () => {
 		let state = reducer(running(), { type: 'event', event: { event: 'controller.state', data: { state: 'connected', peer: 'PC', remoteActive: false } }, now: 1 });
 		state = reducer(state, { type: 'core-status', status: { state: 'exited', message: 'gone' } });

@@ -20,7 +20,7 @@ interface Pending {
 	timer: NodeJS.Timeout;
 }
 
-const EVENT_NAMES = new Set(['controller.state', 'receiver.state', 'latency', 'log', 'peers.changed']);
+const EVENT_NAMES = new Set(['controller.state', 'controller.warning', 'receiver.state', 'latency', 'log', 'peers.changed']);
 
 /**
  * The UI side of docs/IPC.md over a pair of streams (the core's stdout and stdin): newline-delimited JSON,

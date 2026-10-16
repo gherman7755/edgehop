@@ -64,6 +64,7 @@ where the other computer sits), `switching` (default `true`; `false` mirrors the
 |---|---|
 | `controller.state` | `{state: "idle" \| "connecting" \| "connected" \| "failed", peer?, remoteActive?, message?}` |
 | `receiver.state` | `{state: "stopped" \| "listening" \| "connected", port?, peer?}` |
+| `controller.warning` | `{message}`: the other computer connected but cannot apply input (for example a Mac without the Accessibility permission). Shown while connected; the UI clears it when the session ends |
 | `latency` | `{ms}` (controller ping round trip, every 2 s) |
 | `log` | `{source: "controller" \| "receiver", line}` |
 | `peers.changed` | `{peers: [{name}]}` |

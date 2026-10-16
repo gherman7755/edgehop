@@ -35,6 +35,7 @@ export interface CoreInfo {
 export type CoreEvent =
 	| { event: 'controller.state'; data: ControllerState }
 	| { event: 'receiver.state'; data: ReceiverState }
+	| { event: 'controller.warning'; data: { message: string } }
 	| { event: 'latency'; data: { ms: number } }
 	| { event: 'log'; data: { source: 'controller' | 'receiver' | 'core'; line: string } }
 	| { event: 'peers.changed'; data: { peers: Peer[] } };
