@@ -156,6 +156,38 @@ pub fn windows_to_hid(scan: u16, extended: bool) -> Option<u16> {
     TABLE.iter().find(|&&(_, w)| w == code).map(|&(h, _)| h)
 }
 
+const VK_PAUSE: u32 = 0x13;
+const VK_NUMLOCK: u32 = 0x90;
+
+/// The HID usage for a key event from a Windows keyboard hook (`vk`: virtual-key code, `scan`: scan code,
+/// `extended`: the `E0` flag). Scan codes name the physical key, which is what the wire carries; two keys need
+/// care: Pause has no usable single scan code and is ignored, and NumLock is reported with a misleading
+/// extended flag on some keyboards, so it is recognised by its virtual-key code. Fake Shift events that Windows
+/// adds around some numpad and navigation keys (`E0 2A` / `E0 AA`) are not in the table and so are ignored.
+pub fn windows_key_to_hid(vk: u32, scan: u16, extended: bool) -> Option<u16> {
+    match vk {
+        VK_PAUSE => None,
+        VK_NUMLOCK => Some(0x53),
+        _ => windows_to_hid(scan, extended),
+    }
+}
+
+/// The panic chord: Ctrl + Option/Alt + Command/Win + Escape, pressed on either computer, stops sharing. `event` is
+/// what capture reports (key events carry the modifier state in effect when the key went down).
+pub fn is_panic_chord(event: &crate::InputEvent) -> bool {
+    let crate::InputEvent::Key {
+        code,
+        is_down,
+        modifiers,
+    } = event
+    else {
+        return false;
+    };
+    *is_down
+        && *code == HID_ESCAPE
+        && modifiers.contains(Modifiers::CONTROL | Modifiers::OPTION | Modifiers::COMMAND)
+}
+
 /// The modifier a HID usage stands for, if it is one of the eight modifier keys (usages 0xE0 to 0xE7). Left and
 /// right keys give the same bit; command is the Windows / Meta key.
 pub fn modifier_for(hid: u16) -> Option<Modifiers> {
@@ -230,6 +262,39 @@ mod tests {
         assert_eq!(windows_to_hid(0x1C, false), Some(0x28));
         assert_eq!(windows_to_hid(0x1C, true), Some(0x58));
         assert_eq!(windows_to_hid(0x7F, false), None);
+    }
+
+    #[test]
+    fn the_panic_chord_needs_all_three_modifiers_and_escape_going_down() {
+        use crate::InputEvent;
+        let all = Modifiers::CONTROL | Modifiers::OPTION | Modifiers::COMMAND;
+        let key = |code, is_down, modifiers| InputEvent::Key {
+            code,
+            is_down,
+            modifiers,
+        };
+        assert!(is_panic_chord(&key(HID_ESCAPE, true, all)));
+        assert!(!is_panic_chord(&key(HID_ESCAPE, false, all)));
+        assert!(!is_panic_chord(&key(
+            HID_ESCAPE,
+            true,
+            Modifiers::CONTROL | Modifiers::OPTION
+        )));
+        assert!(!is_panic_chord(&key(0x14, true, all)));
+        assert!(!is_panic_chord(&InputEvent::Scroll {
+            horizontal: 0,
+            vertical: 1
+        }));
+    }
+
+    #[test]
+    fn hook_events_map_with_the_quirks_of_pause_numlock_and_fake_shifts() {
+        assert_eq!(windows_key_to_hid(0x41, 0x1E, false), Some(0x04)); // A
+        assert_eq!(windows_key_to_hid(0x25, 0x4B, true), Some(0x50)); // Left arrow
+        assert_eq!(windows_key_to_hid(0x64, 0x4B, false), Some(0x5C)); // Numpad 4
+        assert_eq!(windows_key_to_hid(0x13, 0x45, false), None); // Pause
+        assert_eq!(windows_key_to_hid(0x90, 0x45, true), Some(0x53)); // NumLock, whatever the flag says
+        assert_eq!(windows_key_to_hid(0x10, 0x2A, true), None); // the fake Shift around Insert
     }
 
     #[test]
