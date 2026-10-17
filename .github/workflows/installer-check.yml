@@ -1,0 +1,60 @@
+name: Installer check
+
+# Does the Windows installer of a release install on a clean machine? Downloads the published setup of a tag
+# (by hand: Actions tab, "Run workflow"; also when this file changes), installs it silently, starts the installed
+# app in smoke mode and uninstalls it.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to check
+        default: v0.3.0
+  pull_request:
+    paths: ['.github/workflows/installer-check.yml']
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      TAG: ${{ inputs.tag || 'v0.3.0' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download the setup and its checksum
+        shell: bash
+        run: |
+          mkdir dl && cd dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*-win-x64-setup.exe' --pattern SHA256SUMS
+          ls -l
+          grep 'win-x64-setup.exe' SHA256SUMS | sha256sum -c -
+
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dl -Filter '*-setup.exe').FullName
+          $dir = Join-Path $env:RUNNER_TEMP 'EdgeHopInstalled'
+          $p = Start-Process -FilePath $setup -ArgumentList '/S', "/D=$dir" -Wait -PassThru
+          "setup exit code: $($p.ExitCode)"
+          Get-ChildItem $dir | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          if (-not (Test-Path (Join-Path $dir 'EdgeHop.exe'))) { throw 'EdgeHop.exe was not installed' }
+          if (-not (Test-Path (Join-Path $dir 'resources\core\edgehop-core.exe'))) { throw 'the core was not installed' }
+          "EDGEHOP_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Smoke test the installed app
+        shell: bash
+        timeout-minutes: 3
+        env:
+          EDGEHOP_SMOKE: "1"
+          EDGEHOP_USER_DATA: ${{ runner.temp }}\edgehop-installed-profile
+        run: |
+          "$EDGEHOP_DIR/EdgeHop.exe" 2>&1 | tee smoke.log
+          grep -q "SMOKE OK" smoke.log
+
+      - name: Uninstall
+        shell: pwsh
+        run: |
+          $u = Join-Path $env:EDGEHOP_DIR 'Uninstall EdgeHop.exe'
+          if (-not (Test-Path $u)) { throw "no uninstaller at $u" }
+          $p = Start-Process -FilePath $u -ArgumentList '/S' -Wait -PassThru
+          "uninstall exit code: $($p.ExitCode)"
